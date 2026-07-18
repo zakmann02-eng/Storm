@@ -1,7 +1,12 @@
 """Environment-driven configuration for Storm.
 
-All tunables live here so behavior can be changed via Railway environment
-variables without touching code.
+Variable names intentionally mirror Colossus (the sports-trading bot that
+shares this Polymarket.US account) where the concept is the same, so the
+two Railway projects are easy to reason about side by side:
+POLYMARKET_KEY_ID/SECRET_KEY, MIN_TRADE_USD/MAX_TRADE_USD,
+MAX_TRADES_SESSION, PAUSED, SCAN_INTERVAL. Vars with no Colossus
+equivalent (Storm's own dry-run switch, daily $ cap, signal edge
+threshold, and self-throttle) keep a STORM_ prefix.
 """
 
 from __future__ import annotations
@@ -31,31 +36,35 @@ def _get_int(name: str, default: int) -> int:
 
 
 class Config:
-    # --- Polymarket credentials (shared with Colossus - same account/key) ---
-    POLYMARKET_PRIVATE_KEY: str = os.environ.get("POLYMARKET_PRIVATE_KEY", "")
-    POLYMARKET_FUNDER_ADDRESS: str = os.environ.get("POLYMARKET_FUNDER_ADDRESS", "")
-    POLYMARKET_API_KEY: str = os.environ.get("POLYMARKET_API_KEY", "")
-    POLYMARKET_API_SECRET: str = os.environ.get("POLYMARKET_API_SECRET", "")
-    POLYMARKET_API_PASSPHRASE: str = os.environ.get("POLYMARKET_API_PASSPHRASE", "")
-
-    CLOB_HOST: str = os.environ.get("CLOB_HOST", "https://clob.polymarket.com")
+    # --- Polymarket.US credentials (shared with Colossus - same account) ---
+    POLYMARKET_KEY_ID: str = os.environ.get("POLYMARKET_KEY_ID", "")
+    POLYMARKET_SECRET_KEY: str = os.environ.get("POLYMARKET_SECRET_KEY", "")
     GAMMA_HOST: str = os.environ.get("GAMMA_HOST", "https://gamma-api.polymarket.com")
-    CHAIN_ID: int = _get_int("CHAIN_ID", 137)
+
+    # --- Telegram (Storm's own bot - separate from Colossus's) ---
+    TELEGRAM_BOT_TOKEN: str = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    TELEGRAM_CHAT_ID: str = os.environ.get("TELEGRAM_CHAT_ID", "")
 
     # --- Rate limiting ---
     # Storm's own conservative slice of the shared account rate limit.
-    # Colossus enforces its own limiter independently against the same key;
-    # this does not coordinate with Colossus's process, it just keeps
-    # Storm's share low so the two together stay under Polymarket's limit.
+    # Colossus doesn't run an explicit limiter of its own; this only
+    # throttles Storm's traffic, so keep it low enough that Storm's usage
+    # plus Colossus's stays under Polymarket's account-wide limit.
     MAX_REQUESTS_PER_SECOND: float = _get_float("STORM_MAX_REQUESTS_PER_SECOND", 2.0)
     RATE_LIMITER_BURST: int = _get_int("STORM_RATE_LIMITER_BURST", 4)
 
     # --- Trading safety ---
     LIVE_TRADING: bool = _get_bool("LIVE_TRADING", False)
-    KILL_SWITCH: bool = _get_bool("STORM_KILL_SWITCH", False)
+    PAUSED: bool = _get_bool("PAUSED", False)
+    # Extra failsafe independent of PAUSED/Telegram: if this file exists on
+    # disk, Storm halts new trades on its next cycle, no restart needed.
     KILL_SWITCH_FILE: str = os.environ.get("STORM_KILL_SWITCH_FILE", "storm.kill")
-    MAX_POSITION_USDC: float = _get_float("STORM_MAX_POSITION_USDC", 25.0)
-    MAX_DAILY_SPEND_USDC: float = _get_float("STORM_MAX_DAILY_SPEND_USDC", 100.0)
+
+    MIN_TRADE_USD: float = _get_float("MIN_TRADE_USD", 0.10)
+    MAX_TRADE_USD: float = _get_float("MAX_TRADE_USD", 1.00)
+    MAX_TRADES_SESSION: int = _get_int("MAX_TRADES_SESSION", 10)
+    # Storm-only extra guard beyond Colossus's per-trade-count cap.
+    MAX_DAILY_SPEND_USDC: float = _get_float("STORM_MAX_DAILY_SPEND_USDC", 5.00)
     MIN_EDGE: float = _get_float("STORM_MIN_EDGE", 0.08)
 
     # --- Weather data ---
@@ -63,7 +72,7 @@ class Config:
         "NWS_USER_AGENT", "storm-weather-bot (set NWS_USER_AGENT env var with contact info)"
     )
 
-    POLL_INTERVAL_SECONDS: int = _get_int("STORM_POLL_INTERVAL_SECONDS", 300)
+    SCAN_INTERVAL: int = _get_int("SCAN_INTERVAL", 300)
     LOG_LEVEL: str = os.environ.get("LOG_LEVEL", "INFO")
 
 

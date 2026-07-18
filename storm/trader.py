@@ -1,5 +1,8 @@
-"""Turns a TradeSignal into either a dry-run log line or a real CLOB order,
-subject to RiskManager's caps and Storm's LIVE_TRADING switch.
+"""Turns a TradeSignal into either a dry-run log line or a real order via
+the Polymarket.US SDK, subject to RiskManager's caps and Storm's
+LIVE_TRADING switch. Sends a Telegram alert (if configured) either way, and
+records the trade in RiskManager so daily caps/session count/dedup stay
+accurate whether or not the order was real.
 
 Storm defaults to dry-run (LIVE_TRADING=false) so it can run safely in
 production and log what it *would* trade before anyone flips it live.
@@ -8,10 +11,12 @@ production and log what it *would* trade before anyone flips it live.
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 
-from storm.clob_client import RateLimitedClobClient
 from storm.risk_manager import RiskManager
 from storm.signal_engine import TradeSignal
+from storm.telegram_bot import TelegramNotifier
+from storm.us_client import USClient
 
 logger = logging.getLogger(__name__)
 
@@ -19,13 +24,15 @@ logger = logging.getLogger(__name__)
 class Trader:
     def __init__(
         self,
-        clob_client: RateLimitedClobClient | None,
+        us_client: USClient | None,
         risk_manager: RiskManager,
+        notifier: TelegramNotifier | None,
         live_trading: bool,
         default_order_usdc: float,
     ):
-        self._clob_client = clob_client
+        self._us_client = us_client
         self._risk_manager = risk_manager
+        self._notifier = notifier
         self._live_trading = live_trading
         self._default_order_usdc = default_order_usdc
 
@@ -41,36 +48,57 @@ class Trader:
             logger.info("Skipping %s (%s): risk manager declined the trade", spec.question, signal.side)
             return
 
-        size_shares = round(approved_usdc / price, 2)
-        token_id = spec.yes_token_id if signal.side == "YES" else spec.no_token_id
+        summary = {
+            "time": datetime.now(timezone.utc).isoformat(),
+            "market_slug": spec.market_slug,
+            "question": spec.question,
+            "side": signal.side,
+            "price": price,
+            "usdc": approved_usdc,
+            "edge": signal.edge,
+            "estimated_probability": signal.estimated_probability,
+        }
 
         if not self._live_trading:
             logger.info(
-                "[DRY RUN] Would BUY %.2f shares of '%s' @ %.4f (%s, edge=%.3f, "
-                "est_prob=%.3f) for ~$%.2f",
-                size_shares,
-                spec.question,
+                "[DRY RUN] Would BUY '%s' @ %.4f (%s, edge=%.3f, est_prob=%.3f) for ~$%.2f",
+                spec.market_slug,
                 price,
                 signal.side,
                 signal.edge,
                 signal.estimated_probability,
                 approved_usdc,
             )
+            self._risk_manager.record_trade(spec.condition_id, approved_usdc, summary)
+            self._notify(
+                f"[DRY RUN] Storm signal\n{spec.question[:120]}\n"
+                f"Side: {signal.side} @ {price:.3f}\nSize: ${approved_usdc:.2f}\n"
+                f"Edge: {signal.edge:+.1%}  Est. prob: {signal.estimated_probability:.1%}"
+            )
             return
 
-        if self._clob_client is None:
-            logger.error("LIVE_TRADING is enabled but no CLOB client is configured - skipping order")
+        if self._us_client is None:
+            logger.error("LIVE_TRADING is enabled but no Polymarket.US client is configured - skipping order")
             return
 
         logger.info(
-            "Placing LIVE order: BUY %.2f shares of '%s' @ %.4f (%s, edge=%.3f) for ~$%.2f",
-            size_shares,
-            spec.question,
+            "Placing LIVE order: BUY '%s' @ %.4f (%s, edge=%.3f) for ~$%.2f",
+            spec.market_slug,
             price,
             signal.side,
             signal.edge,
             approved_usdc,
         )
-        response = self._clob_client.place_limit_order(token_id, price, size_shares, "BUY")
+        response = self._us_client.place_order(spec.market_slug, signal.side, price, approved_usdc)
         logger.info("Order response: %s", response)
-        self._risk_manager.record_spend(approved_usdc)
+
+        self._risk_manager.record_trade(spec.condition_id, approved_usdc, summary)
+        self._notify(
+            f"Storm trade opened\n{spec.question[:120]}\n"
+            f"Side: {signal.side} @ {price:.3f}\nSize: ${approved_usdc:.2f}\n"
+            f"Edge: {signal.edge:+.1%}  Est. prob: {signal.estimated_probability:.1%}"
+        )
+
+    def _notify(self, text: str) -> None:
+        if self._notifier is not None:
+            self._notifier.send(text)

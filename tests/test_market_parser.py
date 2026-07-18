@@ -15,22 +15,20 @@ def _market(question, end_date="2026-07-20T00:00:00Z", description=""):
 def test_parses_rain_market():
     spec = parse_weather_market(
         _market("Will it rain in New York City on July 20?"),
-        yes_token_id="yes-1",
-        no_token_id="no-1",
+        market_slug="nyc-rain-jul-20",
         yes_price=0.35,
     )
     assert spec is not None
     assert spec.variable == "rain"
     assert spec.location == "new york city"
     assert spec.target_date == dt.date(2026, 7, 20)
-    assert spec.yes_token_id == "yes-1"
+    assert spec.market_slug == "nyc-rain-jul-20"
 
 
 def test_parses_temperature_above_market():
     spec = parse_weather_market(
         _market("Will the high temperature in Chicago exceed 90 degrees F?"),
-        yes_token_id="yes-2",
-        no_token_id="no-2",
+        market_slug="chicago-high-temp",
         yes_price=0.5,
     )
     assert spec is not None
@@ -42,8 +40,7 @@ def test_parses_temperature_above_market():
 def test_parses_temperature_below_market():
     spec = parse_weather_market(
         _market("Will the low temperature in Denver be below 20 degrees?"),
-        yes_token_id="yes-3",
-        no_token_id="no-3",
+        market_slug="denver-low-temp",
         yes_price=0.5,
     )
     assert spec is not None
@@ -54,8 +51,7 @@ def test_parses_temperature_below_market():
 def test_returns_none_for_unrelated_market():
     spec = parse_weather_market(
         _market("Will the Lakers win the championship?"),
-        yes_token_id="yes-4",
-        no_token_id="no-4",
+        market_slug="lakers-championship",
         yes_price=0.5,
     )
     assert spec is None
@@ -64,8 +60,7 @@ def test_returns_none_for_unrelated_market():
 def test_returns_none_without_end_date():
     spec = parse_weather_market(
         _market("Will it snow in Boston?", end_date=""),
-        yes_token_id="yes-5",
-        no_token_id="no-5",
+        market_slug="boston-snow",
         yes_price=0.5,
     )
     assert spec is None

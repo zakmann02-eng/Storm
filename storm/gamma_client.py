@@ -61,16 +61,6 @@ class GammaClient:
             offset += page_size
 
 
-def parse_clob_token_ids(market: dict[str, Any]) -> list[str]:
-    """clobTokenIds is returned by Gamma as a JSON-stringified list."""
-    raw = market.get("clobTokenIds")
-    if not raw:
-        return []
-    if isinstance(raw, list):
-        return raw
-    return json.loads(raw)
-
-
 def parse_outcome_prices(market: dict[str, Any]) -> list[float]:
     """outcomePrices is returned by Gamma as a JSON-stringified list of strings."""
     raw = market.get("outcomePrices")

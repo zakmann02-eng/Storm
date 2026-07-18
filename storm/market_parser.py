@@ -53,8 +53,7 @@ _THRESHOLD_RE = re.compile(r"(-?\d+(?:\.\d+)?)\s*(?:°|degrees?)?\s*f\b|(-?\d+(?
 @dataclass
 class WeatherMarketSpec:
     condition_id: str
-    yes_token_id: str
-    no_token_id: str
+    market_slug: str
     question: str
     location: str
     lat: float
@@ -115,8 +114,7 @@ def _resolve_target_date(market: dict[str, Any]) -> dt.date | None:
 
 def parse_weather_market(
     market: dict[str, Any],
-    yes_token_id: str,
-    no_token_id: str,
+    market_slug: str,
     yes_price: float,
 ) -> WeatherMarketSpec | None:
     question = market.get("question") or ""
@@ -145,8 +143,7 @@ def parse_weather_market(
 
     return WeatherMarketSpec(
         condition_id=market.get("conditionId", ""),
-        yes_token_id=yes_token_id,
-        no_token_id=no_token_id,
+        market_slug=market_slug,
         question=question,
         location=location,
         lat=lat,

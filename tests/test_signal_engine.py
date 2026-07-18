@@ -7,8 +7,7 @@ from storm.signal_engine import generate_signal
 def _spec(variable, threshold=None, yes_price=0.5, target_date=dt.date(2026, 7, 20)):
     return WeatherMarketSpec(
         condition_id="0xabc",
-        yes_token_id="yes",
-        no_token_id="no",
+        market_slug="test-market",
         question="test question",
         location="chicago",
         lat=41.8781,

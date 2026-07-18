@@ -1,3 +1,5 @@
 requests>=2.31,<3
 python-dotenv>=1.0,<2
-py-clob-client>=0.20,<1
+# Unpinned to match Colossus's convention - this is the Polymarket.US SDK,
+# a different product/API surface than the standard polymarket.com CLOB.
+polymarket-us
