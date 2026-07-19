@@ -62,6 +62,13 @@ other:
   per calendar day (persisted to `storm_daily_state.json`) so Storm never
   re-fires on a market it already traded today, and caps itself at
   `MAX_TRADES_SESSION` — independent of whatever Colossus is doing.
+- **Live balance check before every real order**: neither bot knows what
+  the other is doing in real time, so `storm/trader.py` pulls the actual
+  account balance from the Polymarket.US SDK right before placing a live
+  order and skips the trade if the shared account can't currently cover
+  it (e.g. Colossus has funds tied up in open positions). This only
+  applies when `LIVE_TRADING=true` — dry-run doesn't touch the real
+  balance.
 
 ## Trading safety
 

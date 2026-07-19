@@ -81,6 +81,23 @@ class Trader:
             logger.error("LIVE_TRADING is enabled but no Polymarket.US client is configured - skipping order")
             return
 
+        # Storm and Colossus share one Polymarket.US account balance and
+        # don't coordinate with each other, so check the real, current
+        # balance right before placing - Colossus may have already
+        # committed funds to its own open positions since Storm's own
+        # daily cap was last checked.
+        balance = self._us_client.get_balance()
+        if balance < approved_usdc:
+            logger.info(
+                "Skipping %s (%s): live balance $%.2f is below the $%.2f this trade needs "
+                "(shared account - Colossus or another Storm trade may have used it)",
+                spec.question,
+                signal.side,
+                balance,
+                approved_usdc,
+            )
+            return
+
         logger.info(
             "Placing LIVE order: BUY '%s' @ %.4f (%s, edge=%.3f) for ~$%.2f",
             spec.market_slug,
