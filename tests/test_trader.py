@@ -82,8 +82,11 @@ def test_live_trade_placed_when_balance_sufficient(tmp_path):
     assert len(risk_manager.trades_today()) == 1
 
 
-def test_dry_run_does_not_check_balance(tmp_path):
-    us_client = _FakeUSClient(balance=0.0)
+def test_dry_run_uses_kelly_sizing_but_skips_the_live_balance_gate(tmp_path):
+    # Dry-run still fetches bankroll and Kelly-sizes off it (for a
+    # realistic simulation) but never reaches the live-only
+    # insufficient-balance check or places a real order.
+    us_client = _FakeUSClient(balance=10.0)
     notifier = _FakeNotifier()
     risk_manager = _risk_manager(tmp_path)
     trader = Trader(us_client, risk_manager, notifier, live_trading=False, default_order_usdc=1.00)
@@ -93,3 +96,32 @@ def test_dry_run_does_not_check_balance(tmp_path):
     assert us_client.orders_placed == []
     assert len(notifier.sent) == 1
     assert len(risk_manager.trades_today()) == 1
+
+
+def test_kelly_sizing_scales_with_bankroll(tmp_path):
+    notifier = _FakeNotifier()
+
+    rm_small = _risk_manager(tmp_path, max_trade_usd=100, state_file=tmp_path / "small.json")
+    trader_small = Trader(_FakeUSClient(balance=1.0), rm_small, notifier, live_trading=False, default_order_usdc=1.00)
+    trader_small.execute(_signal())
+
+    rm_big = _risk_manager(tmp_path, max_trade_usd=100, state_file=tmp_path / "big.json")
+    trader_big = Trader(_FakeUSClient(balance=100.0), rm_big, notifier, live_trading=False, default_order_usdc=1.00)
+    trader_big.execute(_signal())
+
+    small_trade = rm_small.trades_today()[0]
+    big_trade = rm_big.trades_today()[0]
+    assert big_trade["usdc"] > small_trade["usdc"]
+
+
+def test_kelly_sizing_is_zero_bankroll_safe(tmp_path):
+    # A $0 (or unreadable) bankroll should cleanly skip, not error.
+    us_client = _FakeUSClient(balance=0.0)
+    notifier = _FakeNotifier()
+    risk_manager = _risk_manager(tmp_path)
+    trader = Trader(us_client, risk_manager, notifier, live_trading=False, default_order_usdc=1.00)
+
+    trader.execute(_signal())
+
+    assert notifier.sent == []
+    assert risk_manager.trades_today() == []

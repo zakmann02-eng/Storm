@@ -68,3 +68,29 @@ def test_returns_none_without_matching_day_periods():
     periods = [_period(pop=90, date=dt.date(2026, 7, 20))]
     signal = generate_signal(spec, periods, min_edge=0.08)
     assert signal is None
+
+
+def test_blends_nws_and_open_meteo_rain_estimates():
+    spec = _spec("rain", yes_price=0.5)
+    periods = [_period(pop=80)]  # NWS: 0.80
+    open_meteo_forecast = {"precipitation_probability_max": 60}  # Open-Meteo: 0.60
+    signal = generate_signal(spec, periods, min_edge=0.08, open_meteo_forecast=open_meteo_forecast)
+    assert signal is not None
+    assert signal.side == "YES"
+    assert abs(signal.estimated_probability - 0.70) < 1e-9  # average of 0.80 and 0.60
+
+
+def test_falls_back_to_open_meteo_when_nws_has_no_data():
+    spec = _spec("temp_above", threshold=80, yes_price=0.3)
+    open_meteo_forecast = {"temperature_max": 95}
+    signal = generate_signal(spec, periods=[], min_edge=0.08, open_meteo_forecast=open_meteo_forecast)
+    assert signal is not None
+    assert signal.side == "YES"
+
+
+def test_open_meteo_none_forecast_does_not_break_nws_only_estimate():
+    spec = _spec("rain", yes_price=0.2)
+    periods = [_period(pop=90)]
+    signal = generate_signal(spec, periods, min_edge=0.08, open_meteo_forecast=None)
+    assert signal is not None
+    assert signal.estimated_probability == 0.9

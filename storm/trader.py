@@ -6,6 +6,11 @@ accurate whether or not the order was real.
 
 Storm defaults to dry-run (LIVE_TRADING=false) so it can run safely in
 production and log what it *would* trade before anyone flips it live.
+
+Position size is Kelly-derived (see storm/position_sizing.py) using the
+live account balance as bankroll, rather than always requesting a flat
+MAX_TRADE_USD - stronger edges size up, weaker ones size down, all still
+bounded by RiskManager's MIN/MAX_TRADE_USD and daily/session caps.
 """
 
 from __future__ import annotations
@@ -13,6 +18,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
+from storm.position_sizing import kelly_position_size
 from storm.risk_manager import RiskManager
 from storm.signal_engine import TradeSignal
 from storm.telegram_bot import TelegramNotifier
@@ -29,12 +35,14 @@ class Trader:
         notifier: TelegramNotifier | None,
         live_trading: bool,
         default_order_usdc: float,
+        kelly_multiplier: float = 0.5,
     ):
         self._us_client = us_client
         self._risk_manager = risk_manager
         self._notifier = notifier
         self._live_trading = live_trading
         self._default_order_usdc = default_order_usdc
+        self._kelly_multiplier = kelly_multiplier
 
     def execute(self, signal: TradeSignal) -> None:
         spec = signal.market
@@ -43,9 +51,24 @@ class Trader:
             logger.info("Skipping %s: unusable price %.4f", spec.question, price)
             return
 
-        approved_usdc = self._risk_manager.size_order(self._default_order_usdc)
+        # Same balance fetch serves both Kelly sizing (bankroll) and the
+        # pre-trade balance check below - Storm and Colossus share one
+        # account and don't coordinate, so this is the live, current
+        # truth regardless of what either bot's own caps assume.
+        bankroll = self._us_client.get_balance() if self._us_client is not None else self._default_order_usdc
+        kelly_usdc = kelly_position_size(
+            signal.estimated_probability, price, bankroll, self._kelly_multiplier
+        )
+
+        approved_usdc = self._risk_manager.size_order(kelly_usdc)
         if approved_usdc <= 0:
-            logger.info("Skipping %s (%s): risk manager declined the trade", spec.question, signal.side)
+            logger.info(
+                "Skipping %s (%s): risk manager declined the trade (kelly-suggested $%.2f from bankroll $%.2f)",
+                spec.question,
+                signal.side,
+                kelly_usdc,
+                bankroll,
+            )
             return
 
         summary = {
@@ -81,19 +104,13 @@ class Trader:
             logger.error("LIVE_TRADING is enabled but no Polymarket.US client is configured - skipping order")
             return
 
-        # Storm and Colossus share one Polymarket.US account balance and
-        # don't coordinate with each other, so check the real, current
-        # balance right before placing - Colossus may have already
-        # committed funds to its own open positions since Storm's own
-        # daily cap was last checked.
-        balance = self._us_client.get_balance()
-        if balance < approved_usdc:
+        if bankroll < approved_usdc:
             logger.info(
                 "Skipping %s (%s): live balance $%.2f is below the $%.2f this trade needs "
                 "(shared account - Colossus or another Storm trade may have used it)",
                 spec.question,
                 signal.side,
-                balance,
+                bankroll,
                 approved_usdc,
             )
             return

@@ -10,7 +10,7 @@ side.
 
 ## How it works
 
-Every cycle (`SCAN_INTERVAL`, default 300s), Storm:
+Every cycle (`SCAN_INTERVAL`, default 120s), Storm:
 
 1. **Discovers markets** — pulls active markets via the `polymarket-us`
    SDK's general `/v1/markets` endpoint (`storm/us_client.py`'s
@@ -33,17 +33,30 @@ Every cycle (`SCAN_INTERVAL`, default 300s), Storm:
    below", "79 to 80", ...) rather than one simple threshold.
    `storm/bot.py` logs the raw JSON of the first several markets the
    parser can't handle (capped, so it can't spam logs) specifically to
-   help extend the parser for shapes like this.
-4. **Fetches a forecast** — pulls the relevant NWS (api.weather.gov)
-   forecast for that location/date (`storm/weather_client.py`).
-5. **Estimates a signal** — compares Storm's probability estimate from the
-   forecast against the market's current price; if the edge clears
-   `STORM_MIN_EDGE`, it produces a trade signal (`storm/signal_engine.py`).
+   help extend the parser for shapes like this. The probability math for
+   range-bucket markets already exists and is fully tested
+   (`storm/bucket_signal.py` — models the forecast as a normal
+   distribution and integrates it over each bucket's range) but isn't
+   wired into discovery yet, pending real field names for how Polymarket.US
+   represents a bucket's range boundaries within a grouped event.
+4. **Fetches a forecast** — pulls NWS's (api.weather.gov) forecast for that
+   location/date (`storm/weather_client.py`), plus a second, free/keyless
+   forecast from Open-Meteo (`storm/openmeteo_client.py`), which itself
+   blends multiple weather models (GFS, ECMWF, ICON, ...).
+5. **Estimates a signal** — averages the NWS and Open-Meteo estimates (a
+   small ensemble rather than one model's point forecast - either source
+   alone still works fine if the other is unavailable) and compares that
+   against the market's current price; if the edge clears `STORM_MIN_EDGE`,
+   it produces a trade signal (`storm/signal_engine.py`).
 6. **Trades (or logs)** — the risk manager checks pause/kill-switch state
    and position/session/daily caps, then the trader either logs a dry-run
    line or places a real order via the `polymarket-us` SDK
    (`storm/risk_manager.py`, `storm/trader.py`, `storm/us_client.py`), and
-   sends a Telegram alert either way.
+   sends a Telegram alert either way. Position size is Kelly-derived from
+   the live account balance (`storm/position_sizing.py`, half-Kelly by
+   default via `STORM_KELLY_MULTIPLIER`) rather than a flat dollar amount —
+   stronger edges size up, weaker ones size down — still bounded by
+   `MIN_TRADE_USD`/`MAX_TRADE_USD` and the daily/session caps.
 
 Storm places entries and lets markets resolve naturally — there's no
 take-profit/stop-loss position management (Colossus has this; weather
@@ -126,11 +139,14 @@ storm/
   config.py                env-var driven configuration
   logging_config.py
   rate_limiter.py           shared token-bucket limiter
-  gamma_client.py           Polymarket Gamma Markets API (market discovery)
-  market_filter.py          weather keyword filter
+  gamma_client.py           Polymarket Gamma Markets API (discovery fallback)
+  market_filter.py          weather keyword/category filter
   market_parser.py          question/description -> WeatherMarketSpec
   weather_client.py         NWS (api.weather.gov) forecast client
-  signal_engine.py          forecast + market price -> TradeSignal
+  openmeteo_client.py       Open-Meteo forecast client (second ensemble source)
+  signal_engine.py          blended forecast + market price -> TradeSignal
+  bucket_signal.py          range-bucket probability math (not yet wired in)
+  position_sizing.py        Kelly-criterion position sizing
   risk_manager.py           pause/kill-switch + position/session/daily caps
   us_client.py              polymarket-us SDK wrapper, rate-limited
   trader.py                 executes signals (dry-run or live) + Telegram alert
@@ -165,8 +181,10 @@ See `.env.example` for the full list with defaults. Notable ones:
 | `MIN_TRADE_USD`, `MAX_TRADE_USD`, `MAX_TRADES_SESSION` | Trading caps (same names/semantics as Colossus). |
 | `STORM_MAX_DAILY_SPEND_USDC` | Storm-only extra daily $ cap. |
 | `STORM_MIN_EDGE` | Minimum estimated-probability vs. market-price gap required to trade. |
+| `STORM_KELLY_MULTIPLIER` | Fractional Kelly for position sizing (0.5 = half-Kelly default). Still bounded by `MIN_TRADE_USD`/`MAX_TRADE_USD`. |
 | `STORM_MAX_REQUESTS_PER_SECOND`, `STORM_RATE_LIMITER_BURST` | Storm's self-throttle share of the shared Polymarket account's rate limit. |
 | `NWS_USER_AGENT` | Required by NWS's usage policy — set to something identifying (e.g. an email). |
+| *(none)* | Open-Meteo needs no env var — free, keyless, used automatically as a second forecast source. |
 
 ## Deploying to Railway
 

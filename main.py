@@ -9,6 +9,7 @@ from storm.bot import StormBot
 from storm.config import config
 from storm.gamma_client import GammaClient
 from storm.logging_config import setup_logging
+from storm.openmeteo_client import OpenMeteoClient
 from storm.rate_limiter import TokenBucketRateLimiter
 from storm.risk_manager import RiskManager, file_kill_switch
 from storm.telegram_bot import TelegramNotifier
@@ -26,10 +27,14 @@ def build_bot() -> tuple[StormBot, TelegramCommandListener, TelegramNotifier]:
     rate_limiter = TokenBucketRateLimiter(config.MAX_REQUESTS_PER_SECOND, config.RATE_LIMITER_BURST)
     gamma_client = GammaClient(config.GAMMA_HOST, rate_limiter)
     weather_client = NWSClient(config.NWS_USER_AGENT)
+    # Second forecast source blended into signal_engine's estimate for a
+    # small ensemble instead of relying solely on NWS's single model.
+    # Free/keyless, and best-effort - see StormBot._get_open_meteo_forecast.
+    open_meteo_client = OpenMeteoClient()
     notifier = TelegramNotifier(config.TELEGRAM_BOT_TOKEN, config.TELEGRAM_CHAT_ID)
 
     # Required even in dry-run: market discovery goes through the
-    # polymarket-us SDK (see storm/us_client.py's list_events), not just
+    # polymarket-us SDK (see storm/us_client.py's list_markets), not just
     # order placement, since Polymarket.US's own markets - including the
     # "Temp" weather category - aren't served by the generic Gamma API.
     if not config.POLYMARKET_KEY_ID or not config.POLYMARKET_SECRET_KEY:
@@ -50,9 +55,13 @@ def build_bot() -> tuple[StormBot, TelegramCommandListener, TelegramNotifier]:
         notifier=notifier,
         live_trading=config.LIVE_TRADING,
         default_order_usdc=config.MAX_TRADE_USD,
+        kelly_multiplier=config.KELLY_MULTIPLIER,
     )
 
-    bot = StormBot(us_client, gamma_client, weather_client, trader, risk_manager, config.MIN_EDGE)
+    bot = StormBot(
+        us_client, gamma_client, weather_client, trader, risk_manager, config.MIN_EDGE,
+        open_meteo_client=open_meteo_client,
+    )
 
     command_listener = TelegramCommandListener(
         notifier=notifier,

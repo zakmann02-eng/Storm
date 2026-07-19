@@ -66,13 +66,19 @@ class Config:
     # Storm-only extra guard beyond Colossus's per-trade-count cap.
     MAX_DAILY_SPEND_USDC: float = _get_float("STORM_MAX_DAILY_SPEND_USDC", 5.00)
     MIN_EDGE: float = _get_float("STORM_MIN_EDGE", 0.08)
+    # Fractional Kelly - position size scales with edge/confidence rather
+    # than always requesting a flat MAX_TRADE_USD. 0.5 = half-Kelly, a
+    # common practical safety margin against probability-estimate error;
+    # the result still passes through MIN/MAX_TRADE_USD and the daily/
+    # session caps above, so this never sizes beyond those limits.
+    KELLY_MULTIPLIER: float = _get_float("STORM_KELLY_MULTIPLIER", 0.5)
 
     # --- Weather data ---
     NWS_USER_AGENT: str = os.environ.get(
         "NWS_USER_AGENT", "storm-weather-bot (set NWS_USER_AGENT env var with contact info)"
     )
 
-    SCAN_INTERVAL: int = _get_int("SCAN_INTERVAL", 300)
+    SCAN_INTERVAL: int = _get_int("SCAN_INTERVAL", 120)
     LOG_LEVEL: str = os.environ.get("LOG_LEVEL", "INFO")
 
 

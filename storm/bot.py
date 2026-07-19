@@ -13,6 +13,7 @@ from typing import Any
 from storm.gamma_client import GammaClient, parse_outcome_prices
 from storm.market_filter import is_weather_market
 from storm.market_parser import parse_weather_market
+from storm.openmeteo_client import OpenMeteoClient
 from storm.risk_manager import RiskManager
 from storm.signal_engine import generate_signal
 from storm.trader import Trader
@@ -48,10 +49,12 @@ class StormBot:
         trader: Trader,
         risk_manager: RiskManager,
         min_edge: float,
+        open_meteo_client: OpenMeteoClient | None = None,
     ):
         self._us_client = us_client
         self._gamma_client = gamma_client
         self._weather_client = weather_client
+        self._open_meteo_client = open_meteo_client
         self._trader = trader
         self._risk_manager = risk_manager
         self._min_edge = min_edge
@@ -113,11 +116,25 @@ class StormBot:
             logger.debug("No NWS forecast available yet for %s on %s", spec.location, spec.target_date)
             return
 
-        signal = generate_signal(spec, periods, self._min_edge)
+        open_meteo_forecast = self._get_open_meteo_forecast(spec)
+
+        signal = generate_signal(spec, periods, self._min_edge, open_meteo_forecast)
         if signal is None:
             return
 
         self._trader.execute(signal)
+
+    def _get_open_meteo_forecast(self, spec) -> dict[str, Any] | None:
+        """Best-effort second forecast source for a small ensemble -
+        Open-Meteo failing or being unconfigured just falls back to
+        NWS-only, it's never required."""
+        if self._open_meteo_client is None:
+            return None
+        try:
+            return self._open_meteo_client.get_forecast_for_date(spec.lat, spec.lon, spec.target_date)
+        except Exception:
+            logger.debug("Open-Meteo forecast fetch failed for %s", spec.location, exc_info=True)
+            return None
 
     def _log_discovery_diagnostics(self, markets: list[dict[str, Any]]) -> None:
         """One-time (per process) dump of the real category taxonomy and

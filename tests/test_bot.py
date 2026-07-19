@@ -42,8 +42,22 @@ class _FakeRiskManager:
         return False
 
 
-def _bot(us_client, gamma_client):
-    return StormBot(us_client, gamma_client, _FakeWeatherClient(), _FakeTrader(), _FakeRiskManager(), min_edge=0.08)
+class _FakeOpenMeteoClient:
+    def __init__(self, forecast=None, raise_error=False):
+        self._forecast = forecast
+        self._raise_error = raise_error
+
+    def get_forecast_for_date(self, lat, lon, target_date):
+        if self._raise_error:
+            raise RuntimeError("open-meteo unavailable")
+        return self._forecast
+
+
+def _bot(us_client, gamma_client, open_meteo_client=None):
+    return StormBot(
+        us_client, gamma_client, _FakeWeatherClient(), _FakeTrader(), _FakeRiskManager(), min_edge=0.08,
+        open_meteo_client=open_meteo_client,
+    )
 
 
 def test_uses_sdk_markets_when_available():
@@ -126,3 +140,31 @@ def test_discovery_diagnostics_includes_category_probe_results(caplog):
         bot._log_discovery_diagnostics(markets)
 
     assert any("category probe" in r.message and "temp" in r.message for r in caplog.records)
+
+
+class _SpecStub:
+    lat, lon = 40.71, -74.01
+    target_date = None
+    location = "new york city"
+
+
+def test_open_meteo_forecast_used_when_configured():
+    us_client = _FakeUSClient()
+    gamma_client = _FakeGammaClient()
+    open_meteo_client = _FakeOpenMeteoClient(forecast={"temperature_max": 90})
+    bot = _bot(us_client, gamma_client, open_meteo_client)
+
+    assert bot._get_open_meteo_forecast(_SpecStub()) == {"temperature_max": 90}
+
+
+def test_open_meteo_forecast_none_when_not_configured():
+    bot = _bot(_FakeUSClient(), _FakeGammaClient(), open_meteo_client=None)
+
+    assert bot._get_open_meteo_forecast(_SpecStub()) is None
+
+
+def test_open_meteo_forecast_failure_falls_back_to_none():
+    open_meteo_client = _FakeOpenMeteoClient(raise_error=True)
+    bot = _bot(_FakeUSClient(), _FakeGammaClient(), open_meteo_client)
+
+    assert bot._get_open_meteo_forecast(_SpecStub()) is None
