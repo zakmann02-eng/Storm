@@ -106,6 +106,16 @@ def is_weather_market(market: dict[str, Any]) -> bool:
     if _tag_labels(market) & CATEGORY_TAGS:
         return True
 
+    # If the market has an explicit, non-weather category, trust it and
+    # stop there - don't fall through to keyword matching. Sports team
+    # names collide with weather vocabulary often enough to matter (e.g.
+    # an NHL "Panthers vs Hurricanes" market matching "hurricane"), and a
+    # market Gamma/the SDK already categorized isn't one we should be
+    # second-guessing with free text.
+    category = str(market.get("category") or "").strip().lower()
+    if category and category not in CATEGORY_TAGS:
+        return False
+
     # Fallback for markets with missing/inconsistent category data.
     haystack = _haystack(market)
     if any(bad in haystack for bad in EXCLUDE_PHRASES):

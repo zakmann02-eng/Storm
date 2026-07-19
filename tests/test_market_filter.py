@@ -57,3 +57,30 @@ def test_bare_temp_substring_in_question_text_does_not_false_positive():
         "tags": [],
     }
     assert not is_weather_market(market)
+
+
+def test_sports_category_blocks_team_name_keyword_collision():
+    # Real production case: an NHL "Panthers vs Hurricanes" market matched
+    # the "hurricane" weather keyword via the Carolina Hurricanes' team
+    # name. An explicit non-weather category should short-circuit before
+    # ever reaching the keyword fallback.
+    market = {
+        "question": "Who will win: FLA Panthers or CAR Hurricanes?",
+        "slug": "aec-nhl-fla-car-2025-12-23",
+        "description": "Who will win on the upcoming ice hockey game... FLA Panthers or CAR Hurricanes.",
+        "category": "sports",
+        "tags": [],
+    }
+    assert not is_weather_market(market)
+
+
+def test_explicit_non_weather_category_short_circuits_keyword_collision():
+    # Category is authoritative once present and non-weather, even when
+    # question text would otherwise trip a real weather keyword.
+    market = {
+        "question": "Will 'Hurricane' win Best Original Song at the Oscars?",
+        "slug": "hurricane-song-oscars",
+        "category": "entertainment",
+        "tags": [],
+    }
+    assert not is_weather_market(market)
