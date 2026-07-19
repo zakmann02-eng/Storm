@@ -93,6 +93,26 @@ class USClient:
 
         return all_markets
 
+    def probe_categories(self, candidates: tuple[str, ...], limit: int = 5) -> dict[str, object]:
+        """Diagnostic only: explicitly request each candidate category
+        string and report how many markets came back (or the error),
+        independent of the broad unfiltered listing in list_markets().
+        Distinguishes "this account/key can't see Temp markets at all"
+        (every candidate returns 0 or errors) from "the default query
+        undercounts them for some other reason" (a candidate returns
+        results)."""
+        results: dict[str, object] = {}
+        for candidate in candidates:
+            self._rate_limiter.acquire()
+            try:
+                data = self._client.markets.list({"limit": limit, "active": True, "categories": [candidate]})
+            except Exception as exc:
+                results[candidate] = f"error: {exc}"
+                continue
+            items = _extract_items(data, "markets", "data", "results")
+            results[candidate] = len(items)
+        return results
+
     def get_balance(self) -> float:
         self._rate_limiter.acquire()
         try:

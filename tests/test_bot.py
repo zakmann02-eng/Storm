@@ -2,14 +2,18 @@ from storm.bot import StormBot
 
 
 class _FakeUSClient:
-    def __init__(self, markets=None, raise_error=False):
+    def __init__(self, markets=None, raise_error=False, probe_results=None):
         self._markets = markets if markets is not None else []
         self._raise_error = raise_error
+        self._probe_results = probe_results if probe_results is not None else {}
 
     def list_markets(self):
         if self._raise_error:
             raise RuntimeError("SDK unavailable")
         return self._markets
+
+    def probe_categories(self, candidates, limit=5):
+        return self._probe_results
 
 
 class _FakeGammaClient:
@@ -108,3 +112,17 @@ def test_discovery_diagnostics_finds_loose_text_candidates(caplog):
         bot._log_discovery_diagnostics(markets)
 
     assert any("loose-text" in r.message for r in caplog.records)
+
+
+def test_discovery_diagnostics_includes_category_probe_results(caplog):
+    import logging
+
+    markets = [{"slug": "a", "question": "Lakers vs Celtics", "category": "sports"}]
+    us_client = _FakeUSClient(markets=markets, probe_results={"Temp": 0, "temp": 3})
+    gamma_client = _FakeGammaClient()
+    bot = _bot(us_client, gamma_client)
+
+    with caplog.at_level(logging.INFO, logger="storm.bot"):
+        bot._log_discovery_diagnostics(markets)
+
+    assert any("category probe" in r.message and "temp" in r.message for r in caplog.records)

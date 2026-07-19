@@ -33,6 +33,11 @@ _MAX_DIAGNOSTIC_DUMPS = 10
 _LOOSE_DIAGNOSTIC_TERMS = ("temp", "rain", "snow", "weather", "degree", "hurricane", "storm")
 _MAX_LOOSE_DIAGNOSTIC_DUMPS = 5
 
+# Candidate category strings to explicitly probe for, to tell "this
+# account/key can't see Temp markets at all" apart from "the unfiltered
+# default query just doesn't surface them".
+_CATEGORY_PROBE_CANDIDATES = ("Temp", "temp", "weather", "Weather", "Temps")
+
 
 class StormBot:
     def __init__(
@@ -142,6 +147,12 @@ class StormBot:
                         json.dumps(m, default=str)[:3000],
                     )
         logger.info("DIAGNOSTIC loose-text scan: %d candidate(s) out of %d markets", loose_matches, len(markets))
+
+        try:
+            probe_results = self._us_client.probe_categories(_CATEGORY_PROBE_CANDIDATES)
+            logger.info("DIAGNOSTIC explicit category probe: %s", probe_results)
+        except Exception:
+            logger.exception("DIAGNOSTIC category probe failed")
 
     def _log_diagnostic_sample(self, market: dict[str, Any]) -> None:
         if self._diagnostic_dumps >= _MAX_DIAGNOSTIC_DUMPS:
