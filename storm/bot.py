@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from collections import Counter
 from typing import Any
 
 from storm.gamma_client import GammaClient, parse_outcome_prices
@@ -24,6 +25,13 @@ logger = logging.getLogger(__name__)
 # per process lifetime. Temporary-ish diagnostic aid for tuning
 # market_parser.py against real market shapes; capped so it can't spam logs.
 _MAX_DIAGNOSTIC_DUMPS = 10
+
+# Loose, filter-independent terms used only for the one-time discovery
+# diagnostic below - deliberately broader than market_filter.py's real
+# keyword list, to surface candidates even if is_weather_market() itself
+# is wrong about what counts as a match.
+_LOOSE_DIAGNOSTIC_TERMS = ("temp", "rain", "snow", "weather", "degree", "hurricane", "storm")
+_MAX_LOOSE_DIAGNOSTIC_DUMPS = 5
 
 
 class StormBot:
@@ -43,6 +51,7 @@ class StormBot:
         self._risk_manager = risk_manager
         self._min_edge = min_edge
         self._diagnostic_dumps = 0
+        self._logged_discovery_diagnostics = False
 
     def run_cycle(self) -> None:
         if os.getenv("PAUSED", "false").lower() == "true":
@@ -50,6 +59,7 @@ class StormBot:
             return
 
         markets = self._discover_markets()
+        self._log_discovery_diagnostics(markets)
         weather_markets = [m for m in markets if is_weather_market(m)]
         logger.info("Scanned %d active markets, %d look weather-related", len(markets), len(weather_markets))
 
@@ -103,6 +113,35 @@ class StormBot:
             return
 
         self._trader.execute(signal)
+
+    def _log_discovery_diagnostics(self, markets: list[dict[str, Any]]) -> None:
+        """One-time (per process) dump of the real category taxonomy and
+        any loosely-weather-looking markets, independent of
+        is_weather_market()'s verdict - lets us tell "no weather markets
+        exist right now" apart from "the filter is wrong about what a
+        weather market looks like" using real production data."""
+        if self._logged_discovery_diagnostics:
+            return
+        self._logged_discovery_diagnostics = True
+
+        categories = Counter(str(m.get("category") or "<none>") for m in markets)
+        logger.info("DIAGNOSTIC category breakdown (top 20 of %d markets): %s", len(markets), categories.most_common(20))
+
+        dumped = 0
+        loose_matches = 0
+        for m in markets:
+            text = f"{m.get('question', '')} {m.get('slug', '')}".lower()
+            if any(term in text for term in _LOOSE_DIAGNOSTIC_TERMS):
+                loose_matches += 1
+                if dumped < _MAX_LOOSE_DIAGNOSTIC_DUMPS:
+                    dumped += 1
+                    logger.info(
+                        "DIAGNOSTIC loose-text candidate (%d/%d): %s",
+                        dumped,
+                        _MAX_LOOSE_DIAGNOSTIC_DUMPS,
+                        json.dumps(m, default=str)[:3000],
+                    )
+        logger.info("DIAGNOSTIC loose-text scan: %d candidate(s) out of %d markets", loose_matches, len(markets))
 
     def _log_diagnostic_sample(self, market: dict[str, Any]) -> None:
         if self._diagnostic_dumps >= _MAX_DIAGNOSTIC_DUMPS:
