@@ -22,12 +22,20 @@ Every cycle (`SCAN_INTERVAL`, default 120s), Storm:
    Gamma API, so that (`storm/gamma_client.py`) is kept only as a
    fallback if the SDK call fails or returns nothing.
 2. **Filters to weather** — checks for an exact match against
-   Polymarket.US's "Temp" category/tag first, then falls back to
-   keyword-matching question/description/tags, to keep Storm out of
-   Colossus's sports-league territory (`storm/market_filter.py`).
+   Polymarket.US's "Temp" category/tag first, then a structured
+   "is this definitely sports?" check (`sportsMarketType`, or a tag
+   carrying `sport`/`league` — both confirmed straight from Polymarket.US's
+   own OpenAPI schema), then falls back to keyword-matching
+   question/description/tags — to keep Storm out of Colossus's
+   sports-league territory (`storm/market_filter.py`).
 3. **Parses the market** — extracts location, weather variable (rain/snow/
    temp above/below a threshold), and target date from the question text
-   and the market's `endDate` (`storm/market_parser.py`). Note: some
+   and the market's `endDate` (`storm/market_parser.py`). Pricing comes
+   from `storm/market_pricing.py`, which prefers the modern `marketSides`
+   (long/short) representation and falls back to the legacy `outcomePrices`
+   field — Polymarket.US's own OpenAPI schema marks `outcomePrices` (and
+   `conditionId`, replaced by `id`) as deprecated, so relying on those
+   alone risks silently skipping real markets. Note: some
    weather questions (e.g. "Highest temperature in NYC on July 18?") are
    grouped Polymarket events with several range-bucket outcomes ("78 or
    below", "79 to 80", ...) rather than one simple threshold.
@@ -140,8 +148,9 @@ storm/
   logging_config.py
   rate_limiter.py           shared token-bucket limiter
   gamma_client.py           Polymarket Gamma Markets API (discovery fallback)
-  market_filter.py          weather keyword/category filter
+  market_filter.py          weather keyword/category/structured filter
   market_parser.py          question/description -> WeatherMarketSpec
+  market_pricing.py         marketSides/outcomePrices -> [yes_price, no_price]
   weather_client.py         NWS (api.weather.gov) forecast client
   openmeteo_client.py       Open-Meteo forecast client (second ensemble source)
   signal_engine.py          blended forecast + market price -> TradeSignal

@@ -142,7 +142,7 @@ def parse_weather_market(
         return None
 
     return WeatherMarketSpec(
-        condition_id=market.get("conditionId", ""),
+        condition_id=str(market.get("id") or market.get("conditionId") or ""),
         market_slug=market_slug,
         question=question,
         location=location,

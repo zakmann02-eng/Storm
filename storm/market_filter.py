@@ -88,6 +88,21 @@ def _tag_labels(market: dict[str, Any]) -> set[str]:
     return labels
 
 
+def _is_structurally_sports(market: dict[str, Any]) -> bool:
+    """Confirmed from Polymarket.US's own OpenAPI schema: "sportsMarketType"
+    (e.g. SPORTS_MARKET_TYPE_MONEYLINE) is populated only on sports
+    markets, and tags carry "sport"/"league" sub-objects only for sports
+    tags. These are structured signals, not text guesses - more precise
+    than the category-string check for catching sports markets that
+    happen to have thin/missing category data."""
+    if market.get("sportsMarketType"):
+        return True
+    for tag in market.get("tags") or []:
+        if isinstance(tag, dict) and (tag.get("sport") or tag.get("league")):
+            return True
+    return False
+
+
 def _haystack(market: dict[str, Any]) -> str:
     text_fields = (
         str(market.get("question", "")),
@@ -105,6 +120,9 @@ def is_weather_market(market: dict[str, Any]) -> bool:
     # reliable than free-text keyword guessing.
     if _tag_labels(market) & CATEGORY_TAGS:
         return True
+
+    if _is_structurally_sports(market):
+        return False
 
     # If the market has an explicit, non-weather category, trust it and
     # stop there - don't fall through to keyword matching. Sports team

@@ -10,9 +10,10 @@ import os
 from collections import Counter
 from typing import Any
 
-from storm.gamma_client import GammaClient, parse_outcome_prices
+from storm.gamma_client import GammaClient
 from storm.market_filter import is_weather_market
 from storm.market_parser import parse_weather_market
+from storm.market_pricing import parse_yes_no_prices
 from storm.openmeteo_client import OpenMeteoClient
 from storm.risk_manager import RiskManager
 from storm.signal_engine import generate_signal
@@ -91,13 +92,16 @@ class StormBot:
         return list(self._gamma_client.iter_active_markets())
 
     def _process_market(self, market: dict[str, Any]) -> None:
-        condition_id = market.get("conditionId", "")
+        # Polymarket.US's own /v1/markets schema uses "id" as the unique
+        # market identifier; "conditionId" is the legacy polymarket.com/
+        # Gamma naming, kept as a fallback for the Gamma fallback path.
+        condition_id = str(market.get("id") or market.get("conditionId") or "")
         if condition_id and self._risk_manager.already_traded(condition_id):
             logger.debug("Already traded %s today - skipping", condition_id)
             return
 
         market_slug = market.get("slug") or ""
-        prices = parse_outcome_prices(market)
+        prices = parse_yes_no_prices(market)
         # Binary Polymarket markets (including each individual range-bucket
         # outcome within a grouped event) list outcome prices as [Yes, No].
         if not market_slug or len(prices) != 2:

@@ -84,3 +84,25 @@ def test_explicit_non_weather_category_short_circuits_keyword_collision():
         "tags": [],
     }
     assert not is_weather_market(market)
+
+
+def test_sports_market_type_blocks_keyword_collision_even_without_category():
+    # Structured signal from Polymarket.US's real schema: sportsMarketType
+    # is populated only on sports markets. Should short-circuit before
+    # category/keyword checks even if category itself is missing.
+    market = {
+        "question": "CAR Hurricanes -1.5 puck line",
+        "slug": "aec-nhl-car-puckline",
+        "sportsMarketType": "SPORTS_MARKET_TYPE_SPREAD",
+        "tags": [],
+    }
+    assert not is_weather_market(market)
+
+
+def test_tag_sport_or_league_blocks_keyword_collision():
+    market = {
+        "question": "Miami Hurricanes to cover the spread?",
+        "slug": "miami-hurricanes-spread",
+        "tags": [{"label": "NCAAF", "sport": {"name": "Football"}}],
+    }
+    assert not is_weather_market(market)
