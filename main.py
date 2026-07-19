@@ -28,13 +28,13 @@ def build_bot() -> tuple[StormBot, TelegramCommandListener, TelegramNotifier]:
     weather_client = NWSClient(config.NWS_USER_AGENT)
     notifier = TelegramNotifier(config.TELEGRAM_BOT_TOKEN, config.TELEGRAM_CHAT_ID)
 
-    us_client = None
-    if config.LIVE_TRADING:
-        if not config.POLYMARKET_KEY_ID or not config.POLYMARKET_SECRET_KEY:
-            raise RuntimeError(
-                "LIVE_TRADING is enabled but POLYMARKET_KEY_ID/POLYMARKET_SECRET_KEY are not set"
-            )
-        us_client = USClient(config.POLYMARKET_KEY_ID, config.POLYMARKET_SECRET_KEY, rate_limiter)
+    # Required even in dry-run: market discovery goes through the
+    # polymarket-us SDK (see storm/us_client.py's list_events), not just
+    # order placement, since Polymarket.US's own markets - including the
+    # "Temp" weather category - aren't served by the generic Gamma API.
+    if not config.POLYMARKET_KEY_ID or not config.POLYMARKET_SECRET_KEY:
+        raise RuntimeError("POLYMARKET_KEY_ID/POLYMARKET_SECRET_KEY are not set")
+    us_client = USClient(config.POLYMARKET_KEY_ID, config.POLYMARKET_SECRET_KEY, rate_limiter)
 
     risk_manager = RiskManager(
         min_trade_usd=config.MIN_TRADE_USD,
@@ -52,7 +52,7 @@ def build_bot() -> tuple[StormBot, TelegramCommandListener, TelegramNotifier]:
         default_order_usdc=config.MAX_TRADE_USD,
     )
 
-    bot = StormBot(gamma_client, weather_client, trader, risk_manager, config.MIN_EDGE)
+    bot = StormBot(us_client, gamma_client, weather_client, trader, risk_manager, config.MIN_EDGE)
 
     command_listener = TelegramCommandListener(
         notifier=notifier,

@@ -12,14 +12,25 @@ side.
 
 Every cycle (`SCAN_INTERVAL`, default 300s), Storm:
 
-1. **Discovers markets** — pulls all active markets from Polymarket's public
-   Gamma Markets API (`storm/gamma_client.py`).
-2. **Filters to weather** — keyword-matches question/description/tags to
-   keep Storm out of Colossus's sports-league territory
-   (`storm/market_filter.py`).
+1. **Discovers markets** — pulls active markets via the `polymarket-us`
+   SDK's `events.list()` (`storm/us_client.py`'s `list_events`), the same
+   primary source Colossus uses. Polymarket.US's own markets (including
+   the "Temp" weather category) aren't served by the generic public Gamma
+   API, so that (`storm/gamma_client.py`) is kept only as a fallback if
+   the SDK call fails or returns nothing.
+2. **Filters to weather** — checks for an exact match against
+   Polymarket.US's "Temp" category/tag first, then falls back to
+   keyword-matching question/description/tags, to keep Storm out of
+   Colossus's sports-league territory (`storm/market_filter.py`).
 3. **Parses the market** — extracts location, weather variable (rain/snow/
    temp above/below a threshold), and target date from the question text
-   and the market's `endDate` (`storm/market_parser.py`).
+   and the market's `endDate` (`storm/market_parser.py`). Note: some
+   weather questions (e.g. "Highest temperature in NYC on July 18?") are
+   grouped Polymarket events with several range-bucket outcomes ("78 or
+   below", "79 to 80", ...) rather than one simple threshold.
+   `storm/bot.py` logs the raw JSON of the first several markets the
+   parser can't handle (capped, so it can't spam logs) specifically to
+   help extend the parser for shapes like this.
 4. **Fetches a forecast** — pulls the relevant NWS (api.weather.gov)
    forecast for that location/date (`storm/weather_client.py`).
 5. **Estimates a signal** — compares Storm's probability estimate from the
@@ -143,7 +154,7 @@ See `.env.example` for the full list with defaults. Notable ones:
 
 | Variable | Purpose |
 |---|---|
-| `POLYMARKET_KEY_ID`, `POLYMARKET_SECRET_KEY` | Polymarket.US API credentials (same account as Colossus). Required only when `LIVE_TRADING=true`. |
+| `POLYMARKET_KEY_ID`, `POLYMARKET_SECRET_KEY` | Polymarket.US API credentials (same account as Colossus). Always required, even in dry-run - market discovery goes through the SDK, not just order placement. |
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | Storm's own Telegram bot for alerts/commands. Leave blank to disable. |
 | `LIVE_TRADING` | `false` (default) = dry-run/log only. `true` = place real orders. |
 | `PAUSED` | Stop opening new trades (env var or Telegram `/pause` `/resume`). |
