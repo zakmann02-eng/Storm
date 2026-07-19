@@ -1,15 +1,25 @@
 """Keyword-based filtering to find weather markets among all Polymarket
 markets, and to keep Storm out of Colossus's sports-league territory.
 
-Polymarket doesn't reliably tag every market as "weather", so this filters
-on question/slug/description/tag text. It's intentionally simple - false
-negatives (missing an oddly-worded weather market) are safer than false
-positives (Storm trading a market it doesn't understand).
+Polymarket.US groups all weather markets (temperature, rain, snow,
+storms) under a single "Temp" category/tag in the app - CATEGORY_TAGS
+below is an exact-match check against that (plus a couple of likely
+variants), which is far more reliable than free-text keyword matching.
+It's checked first; the keyword heuristic on question/slug/description
+text remains as a fallback for markets that lack clean category/tag data.
+False negatives (missing an oddly-worded weather market) are safer than
+false positives (Storm trading a market it doesn't understand).
 """
 
 from __future__ import annotations
 
 from typing import Any
+
+# Exact (not substring) match against a market's category field or a tag's
+# label/slug. Deliberately exact rather than substring - "temp" as a
+# substring would false-positive on unrelated words (temporary, attempt,
+# template, ...).
+CATEGORY_TAGS = {"temp", "temps", "weather"}
 
 WEATHER_KEYWORDS = (
     "temperature",
@@ -62,6 +72,22 @@ def _tag_text(tag: Any) -> str:
     return str(tag)
 
 
+def _tag_labels(market: dict[str, Any]) -> set[str]:
+    labels: set[str] = set()
+    category = market.get("category")
+    if category:
+        labels.add(str(category).strip().lower())
+    for tag in market.get("tags") or []:
+        if isinstance(tag, dict):
+            for key in ("label", "slug"):
+                val = tag.get(key)
+                if val:
+                    labels.add(str(val).strip().lower())
+        elif tag:
+            labels.add(str(tag).strip().lower())
+    return labels
+
+
 def _haystack(market: dict[str, Any]) -> str:
     text_fields = (
         str(market.get("question", "")),
@@ -74,6 +100,13 @@ def _haystack(market: dict[str, Any]) -> str:
 
 
 def is_weather_market(market: dict[str, Any]) -> bool:
+    # Primary signal: Polymarket.US files all weather markets under a
+    # single "Temp" category/tag - an exact match here is far more
+    # reliable than free-text keyword guessing.
+    if _tag_labels(market) & CATEGORY_TAGS:
+        return True
+
+    # Fallback for markets with missing/inconsistent category data.
     haystack = _haystack(market)
     if any(bad in haystack for bad in EXCLUDE_PHRASES):
         return False
