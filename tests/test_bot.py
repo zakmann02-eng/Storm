@@ -6,7 +6,7 @@ class _FakeUSClient:
         self._markets = markets if markets is not None else []
         self._raise_error = raise_error
 
-    def list_events(self):
+    def list_markets(self):
         if self._raise_error:
             raise RuntimeError("SDK unavailable")
         return self._markets

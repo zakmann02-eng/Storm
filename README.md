@@ -13,11 +13,14 @@ side.
 Every cycle (`SCAN_INTERVAL`, default 300s), Storm:
 
 1. **Discovers markets** — pulls active markets via the `polymarket-us`
-   SDK's `events.list()` (`storm/us_client.py`'s `list_events`), the same
-   primary source Colossus uses. Polymarket.US's own markets (including
-   the "Temp" weather category) aren't served by the generic public Gamma
-   API, so that (`storm/gamma_client.py`) is kept only as a fallback if
-   the SDK call fails or returns nothing.
+   SDK's general `/v1/markets` endpoint (`storm/us_client.py`'s
+   `list_markets`). Colossus (a sports bot) uses `events.list()` ->
+   `/v1/events` instead, but in production that returned 2,599/2,599
+   sampled markets as `category: sports` - it's a sports-specific
+   resource, not a general one. Polymarket.US's own markets (including
+   the "Temp" weather category) also aren't served by the generic public
+   Gamma API, so that (`storm/gamma_client.py`) is kept only as a
+   fallback if the SDK call fails or returns nothing.
 2. **Filters to weather** — checks for an exact match against
    Polymarket.US's "Temp" category/tag first, then falls back to
    keyword-matching question/description/tags, to keep Storm out of

@@ -16,39 +16,42 @@ from storm.rate_limiter import TokenBucketRateLimiter
 logger = logging.getLogger(__name__)
 
 
-def _extract_events(data: object) -> list[dict]:
+def _extract_items(data: object, *keys: str) -> list[dict]:
     if isinstance(data, list):
         return data
     if isinstance(data, dict):
-        return data.get("data") or data.get("events") or data.get("results") or []
+        for key in keys:
+            if data.get(key):
+                return data[key]
     return []
 
 
-def _flatten_events(events: list[dict]) -> list[dict]:
-    """Polymarket groups related outcomes under one event (e.g. a single
-    "Highest temperature in NYC" event containing several range-bucket
-    sub-markets like "78 or below", "79 to 80", ...). Flatten each
-    sub-market into its own dict, merged with the parent event's shared
-    fields (category, tags, endDate), mirroring Colossus's own
-    event-flattening in _get_us_sdk_markets."""
-    markets: list[dict] = []
-    for event in events:
-        event_slug = event.get("slug") or event.get("eventSlug") or ""
-        sub_markets = event.get("markets") or []
+def _flatten_grouped(items: list[dict]) -> list[dict]:
+    """Polymarket sometimes groups related outcomes under one parent (e.g.
+    a single "Highest temperature in NYC" event containing several
+    range-bucket sub-markets like "78 or below", "79 to 80", ...) and
+    sometimes returns already-flat individual markets. Handle both: flatten
+    any nested "markets" sub-array into its own row merged with the
+    parent's shared fields, normalizing a "question" text field either way
+    ("title" is the polymarket-us SDK's field name; Gamma uses "question")."""
+    rows: list[dict] = []
+    for item in items:
+        item_slug = item.get("eventSlug") or item.get("slug") or ""
+        sub_markets = item.get("markets") or []
         if sub_markets:
             for m in sub_markets:
-                row = {**event, **m}
-                row["eventSlug"] = event_slug
+                row = {**item, **m}
+                row["eventSlug"] = item_slug
                 row["question"] = (
-                    m.get("question") or m.get("title") or event.get("title") or event.get("question") or ""
+                    m.get("question") or m.get("title") or item.get("title") or item.get("question") or ""
                 )
-                markets.append(row)
+                rows.append(row)
         else:
-            row = dict(event)
-            row["eventSlug"] = event_slug
-            row["question"] = event.get("question") or event.get("title") or ""
-            markets.append(row)
-    return markets
+            row = dict(item)
+            row["eventSlug"] = item_slug
+            row["question"] = item.get("question") or item.get("title") or ""
+            rows.append(row)
+    return rows
 
 
 class USClient:
@@ -63,28 +66,28 @@ class USClient:
         logger.info("Polymarket.US client initialized - key_id %s...", key_id.strip()[:8])
         return client
 
-    def list_events(self, limit: int = 200, max_pages: int = 15) -> list[dict]:
-        """Storm's primary market-discovery source. Polymarket.US's own
-        markets (including the "Temp" weather category) don't appear to
-        be served by the generic public Gamma API - Colossus already
-        relies on this same SDK call as its primary source for the same
-        reason, only falling back to Gamma when this fails."""
+    def list_markets(self, limit: int = 200, max_pages: int = 15) -> list[dict]:
+        """Storm's primary market-discovery source: the general /v1/markets
+        endpoint. Colossus (a sports bot) uses events.list() -> /v1/events,
+        but in production that returned 2,599/2,599 sampled markets as
+        category=sports - it's a sports-specific resource, not a general
+        one. Weather markets live on this broader endpoint instead."""
         all_markets: list[dict] = []
         offset = 0
         for _ in range(max_pages):
             self._rate_limiter.acquire()
             try:
-                data = self._client.events.list({"limit": limit, "active": True, "offset": offset})
+                data = self._client.markets.list({"limit": limit, "active": True, "offset": offset})
             except Exception:
-                logger.exception("events.list failed at offset %d", offset)
+                logger.exception("markets.list failed at offset %d", offset)
                 break
 
-            events = _extract_events(data)
-            if not events:
+            items = _extract_items(data, "markets", "data", "results")
+            if not items:
                 break
 
-            all_markets.extend(_flatten_events(events))
-            if len(events) < limit:
+            all_markets.extend(_flatten_grouped(items))
+            if len(items) < limit:
                 break
             offset += limit
 
