@@ -51,6 +51,7 @@ class StormBot:
         risk_manager: RiskManager,
         min_edge: float,
         open_meteo_client: OpenMeteoClient | None = None,
+        diagnostic_probe_slug: str = "",
     ):
         self._us_client = us_client
         self._gamma_client = gamma_client
@@ -59,6 +60,7 @@ class StormBot:
         self._trader = trader
         self._risk_manager = risk_manager
         self._min_edge = min_edge
+        self._diagnostic_probe_slug = diagnostic_probe_slug
         self._diagnostic_dumps = 0
         self._logged_discovery_diagnostics = False
 
@@ -174,6 +176,20 @@ class StormBot:
             logger.info("DIAGNOSTIC explicit category probe: %s", probe_results)
         except Exception:
             logger.exception("DIAGNOSTIC category probe failed")
+
+        if self._diagnostic_probe_slug:
+            market = self._us_client.retrieve_market_by_slug(self._diagnostic_probe_slug)
+            if market is None:
+                logger.info(
+                    "DIAGNOSTIC slug probe: '%s' NOT FOUND/inaccessible via this API key",
+                    self._diagnostic_probe_slug,
+                )
+            else:
+                logger.info(
+                    "DIAGNOSTIC slug probe: '%s' FOUND - %s",
+                    self._diagnostic_probe_slug,
+                    json.dumps(market, default=str)[:3000],
+                )
 
     def _log_diagnostic_sample(self, market: dict[str, Any]) -> None:
         if self._diagnostic_dumps >= _MAX_DIAGNOSTIC_DUMPS:

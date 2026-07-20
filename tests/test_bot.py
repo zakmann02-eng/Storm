@@ -2,10 +2,11 @@ from storm.bot import StormBot
 
 
 class _FakeUSClient:
-    def __init__(self, markets=None, raise_error=False, probe_results=None):
+    def __init__(self, markets=None, raise_error=False, probe_results=None, slug_probe_result="__unset__"):
         self._markets = markets if markets is not None else []
         self._raise_error = raise_error
         self._probe_results = probe_results if probe_results is not None else {}
+        self._slug_probe_result = slug_probe_result
 
     def list_markets(self):
         if self._raise_error:
@@ -14,6 +15,11 @@ class _FakeUSClient:
 
     def probe_categories(self, candidates, limit=5):
         return self._probe_results
+
+    def retrieve_market_by_slug(self, slug):
+        if self._slug_probe_result == "__unset__":
+            return None
+        return self._slug_probe_result
 
 
 class _FakeGammaClient:
@@ -53,10 +59,11 @@ class _FakeOpenMeteoClient:
         return self._forecast
 
 
-def _bot(us_client, gamma_client, open_meteo_client=None):
+def _bot(us_client, gamma_client, open_meteo_client=None, diagnostic_probe_slug=""):
     return StormBot(
         us_client, gamma_client, _FakeWeatherClient(), _FakeTrader(), _FakeRiskManager(), min_edge=0.08,
         open_meteo_client=open_meteo_client,
+        diagnostic_probe_slug=diagnostic_probe_slug,
     )
 
 
@@ -140,6 +147,44 @@ def test_discovery_diagnostics_includes_category_probe_results(caplog):
         bot._log_discovery_diagnostics(markets)
 
     assert any("category probe" in r.message and "temp" in r.message for r in caplog.records)
+
+
+def test_slug_probe_not_run_when_unconfigured(caplog):
+    import logging
+
+    us_client = _FakeUSClient(markets=[])
+    bot = _bot(us_client, _FakeGammaClient(), diagnostic_probe_slug="")
+
+    with caplog.at_level(logging.INFO, logger="storm.bot"):
+        bot._log_discovery_diagnostics([])
+
+    assert not any("slug probe" in r.message for r in caplog.records)
+
+
+def test_slug_probe_logs_found_market(caplog):
+    import logging
+
+    us_client = _FakeUSClient(markets=[], slug_probe_result={"id": "123", "question": "Highest temp in NYC?"})
+    bot = _bot(us_client, _FakeGammaClient(), diagnostic_probe_slug="highest-temp-nyc")
+
+    with caplog.at_level(logging.INFO, logger="storm.bot"):
+        bot._log_discovery_diagnostics([])
+
+    messages = [r.message for r in caplog.records]
+    assert any("slug probe" in m and "FOUND" in m for m in messages)
+
+
+def test_slug_probe_logs_not_found(caplog):
+    import logging
+
+    us_client = _FakeUSClient(markets=[], slug_probe_result=None)
+    bot = _bot(us_client, _FakeGammaClient(), diagnostic_probe_slug="highest-temp-nyc")
+
+    with caplog.at_level(logging.INFO, logger="storm.bot"):
+        bot._log_discovery_diagnostics([])
+
+    messages = [r.message for r in caplog.records]
+    assert any("slug probe" in m and "NOT FOUND" in m for m in messages)
 
 
 class _SpecStub:

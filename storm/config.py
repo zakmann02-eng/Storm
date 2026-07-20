@@ -81,5 +81,12 @@ class Config:
     SCAN_INTERVAL: int = _get_int("SCAN_INTERVAL", 120)
     LOG_LEVEL: str = os.environ.get("LOG_LEVEL", "INFO")
 
+    # --- One-off diagnostics ---
+    # If set, Storm fetches this exact market slug directly by ID on
+    # startup (bypassing listing/category filtering entirely) and logs
+    # the result - a decisive test for whether this API key can access a
+    # specific known market at all. Leave unset for normal operation.
+    DIAGNOSTIC_PROBE_SLUG: str = os.environ.get("STORM_DIAGNOSTIC_PROBE_SLUG", "")
+
 
 config = Config()

@@ -113,6 +113,25 @@ class USClient:
             results[candidate] = len(items)
         return results
 
+    def retrieve_market_by_slug(self, slug: str) -> dict | None:
+        """Diagnostic: fetch one specific, known-to-exist market directly
+        by slug (GET /v1/market/slug/{slug}), bypassing listing/category
+        filtering entirely. Decisive test for whether this key can access
+        a Temp market at all - if a slug you can see/trade in the app
+        comes back 404/error here, that's this key's access, not a
+        listing-query quirk."""
+        from polymarket_us import NotFoundError
+
+        self._rate_limiter.acquire()
+        try:
+            return self._client.markets.retrieve_by_slug(slug)
+        except NotFoundError as exc:
+            logger.warning("retrieve_market_by_slug(%s): not found - %s", slug, exc)
+            return None
+        except Exception:
+            logger.exception("retrieve_market_by_slug(%s) failed", slug)
+            return None
+
     def get_balance(self) -> float:
         self._rate_limiter.acquire()
         try:

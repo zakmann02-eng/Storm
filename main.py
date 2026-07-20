@@ -61,6 +61,7 @@ def build_bot() -> tuple[StormBot, TelegramCommandListener, TelegramNotifier]:
     bot = StormBot(
         us_client, gamma_client, weather_client, trader, risk_manager, config.MIN_EDGE,
         open_meteo_client=open_meteo_client,
+        diagnostic_probe_slug=config.DIAGNOSTIC_PROBE_SLUG,
     )
 
     command_listener = TelegramCommandListener(
