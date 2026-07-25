@@ -22,6 +22,13 @@ from typing import Any
 CATEGORY_TAGS = {"temp", "temps", "weather"}
 
 WEATHER_KEYWORDS = (
+    # Polymarket.US tc-temp-* slug patterns and daily high/low phrasing
+    "tc-temp",
+    "daily high",
+    "daily low",
+    "°f",
+    "°c",
+    # Existing keywords
     "temperature",
     "highest temp",
     "lowest temp",
