@@ -88,9 +88,9 @@ class StormBot:
             markets = self._us_client.list_markets()
             if markets:
                 return markets
-            logger.warning("polymarket-us markets.list() returned no markets - falling back to Gamma API")
+            logger.warning("polymarket-us events.list() returned no markets - falling back to Gamma API")
         except Exception:
-            logger.exception("polymarket-us markets.list() failed - falling back to Gamma API")
+            logger.exception("polymarket-us events.list() failed - falling back to Gamma API")
         return list(self._gamma_client.iter_active_markets())
 
     def _process_market(self, market: dict[str, Any]) -> None:

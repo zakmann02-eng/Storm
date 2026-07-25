@@ -66,29 +66,36 @@ class USClient:
         logger.info("Polymarket.US client initialized - key_id %s...", key_id.strip()[:8])
         return client
 
-    def list_markets(self, limit: int = 200, max_pages: int = 15) -> list[dict]:
-        """Storm's primary market-discovery source: the general /v1/markets
-        endpoint. Colossus (a sports bot) uses events.list() -> /v1/events,
-        but in production that returned 2,599/2,599 sampled markets as
-        category=sports - it's a sports-specific resource, not a general
-        one. Weather markets live on this broader endpoint instead."""
+    def list_markets(self, limit: int = 200, max_offset: int = 60000) -> list[dict]:
+        """Storm's primary market-discovery source: events.list() ->
+        /v1/events, same as Colossus.
+
+        Confirmed against Colossus's own production logs: this endpoint's
+        pagination is irregular - short pages (e.g. 199 items) can appear
+        mid-stream with thousands more results following them, rather than
+        strictly marking the end. Storm previously stopped as soon as a
+        page came back shorter than `limit`, which reliably truncated the
+        scan at ~2,599 items (all sports) every single time - the real
+        total is closer to 25,000+, and Temp/weather markets live well
+        past that point. The only reliable end-of-results signal is a
+        genuinely EMPTY page, which is what Colossus's own working
+        pagination checks for; mirrored here. max_offset is just a sanity
+        ceiling against a runaway loop if the API ever misbehaves."""
         all_markets: list[dict] = []
         offset = 0
-        for _ in range(max_pages):
+        while offset <= max_offset:
             self._rate_limiter.acquire()
             try:
-                data = self._client.markets.list({"limit": limit, "active": True, "offset": offset})
+                data = self._client.events.list({"limit": limit, "active": True, "offset": offset})
             except Exception:
-                logger.exception("markets.list failed at offset %d", offset)
+                logger.exception("events.list failed at offset %d", offset)
                 break
 
-            items = _extract_items(data, "markets", "data", "results")
+            items = _extract_items(data, "events", "data", "results")
             if not items:
                 break
 
             all_markets.extend(_flatten_grouped(items))
-            if len(items) < limit:
-                break
             offset += limit
 
         return all_markets
@@ -105,11 +112,11 @@ class USClient:
         for candidate in candidates:
             self._rate_limiter.acquire()
             try:
-                data = self._client.markets.list({"limit": limit, "active": True, "categories": [candidate]})
+                data = self._client.events.list({"limit": limit, "active": True, "categories": [candidate]})
             except Exception as exc:
                 results[candidate] = f"error: {exc}"
                 continue
-            items = _extract_items(data, "markets", "data", "results")
+            items = _extract_items(data, "events", "data", "results")
             results[candidate] = len(items)
         return results
 

@@ -13,14 +13,20 @@ side.
 Every cycle (`SCAN_INTERVAL`, default 120s), Storm:
 
 1. **Discovers markets** — pulls active markets via the `polymarket-us`
-   SDK's general `/v1/markets` endpoint (`storm/us_client.py`'s
-   `list_markets`). Colossus (a sports bot) uses `events.list()` ->
-   `/v1/events` instead, but in production that returned 2,599/2,599
-   sampled markets as `category: sports` - it's a sports-specific
-   resource, not a general one. Polymarket.US's own markets (including
-   the "Temp" weather category) also aren't served by the generic public
-   Gamma API, so that (`storm/gamma_client.py`) is kept only as a
-   fallback if the SDK call fails or returns nothing.
+   SDK's `events.list()` -> `/v1/events` (`storm/us_client.py`'s
+   `list_markets`), the same endpoint and method Colossus uses. The real
+   bug history here matters: an early version stopped paginating as soon
+   as a page came back shorter than the requested limit, which happened
+   to reliably truncate the scan at ~2,599 items (all sports) every time.
+   Confirmed against Colossus's own production logs, this endpoint's
+   pagination is irregular — short pages can appear mid-stream with
+   thousands more results following them. The real total is ~25,000+
+   items, and Temp/weather markets live well past where the old code gave
+   up. The fix (and Colossus's own working approach) is to keep
+   paginating until a page comes back genuinely *empty*. Polymarket.US's
+   own markets also aren't served by the generic public Gamma API, so
+   that (`storm/gamma_client.py`) is kept only as a fallback if the SDK
+   call fails or returns nothing.
 2. **Filters to weather** — checks for an exact match against
    Polymarket.US's "Temp" category/tag first, then a structured
    "is this definitely sports?" check (`sportsMarketType`, or a tag
