@@ -81,6 +81,13 @@ class Config:
     SCAN_INTERVAL: int = _get_int("SCAN_INTERVAL", 120)
     LOG_LEVEL: str = os.environ.get("LOG_LEVEL", "INFO")
 
+    # --- Real-time dashboard ---
+    # Additive read-only view onto the scan/trade loop (storm/dashboard.py)
+    # - does not affect trading. Railway injects PORT for the public
+    # service; default 8000 for local runs.
+    DASHBOARD_ENABLED: bool = _get_bool("STORM_DASHBOARD_ENABLED", True)
+    DASHBOARD_PORT: int = _get_int("PORT", 8000)
+
     # --- One-off diagnostics ---
     # If set, Storm fetches this exact market slug directly by ID on
     # startup (bypassing listing/category filtering entirely) and logs

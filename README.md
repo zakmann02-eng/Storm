@@ -1,12 +1,15 @@
 # Storm
 
-Storm is a Polymarket.US trading bot focused exclusively on weather markets
-(temperature, rain, snow, storms, etc). It is a companion to **Colossus**,
-a separate bot that trades most sports-league markets — different repo,
-different Railway project, but the **same Polymarket.US account/API key**.
-Storm's config and structure deliberately mirror Colossus where the
-underlying concept is the same, so the two are easy to operate side by
-side.
+Storm is a Polymarket.US weather analyzer and autonomous trading bot. It
+tracks exactly three locations — **MIA** (Miami International), **ORD**
+(Chicago O'Hare International), and **LAX** (Los Angeles International) —
+and ships with a real-time dashboard (live forecasts, market signals/edge,
+trade history) alongside its unchanged autonomous scan-and-trade loop. It
+is a companion to **Colossus**, a separate bot that trades most
+sports-league markets — different repo, different Railway project, but the
+**same Polymarket.US account/API key**. Storm's config and structure
+deliberately mirror Colossus where the underlying concept is the same, so
+the two are easy to operate side by side.
 
 ## How it works
 
@@ -34,25 +37,30 @@ Every cycle (`SCAN_INTERVAL`, default 120s), Storm:
    own OpenAPI schema), then falls back to keyword-matching
    question/description/tags — to keep Storm out of Colossus's
    sports-league territory (`storm/market_filter.py`).
-3. **Parses the market** — extracts location, weather variable (rain/snow/
-   temp above/below a threshold), and target date from the question text
-   and the market's `endDate` (`storm/market_parser.py`). Pricing comes
-   from `storm/market_pricing.py`, which prefers the modern `marketSides`
-   (long/short) representation and falls back to the legacy `outcomePrices`
-   field — Polymarket.US's own OpenAPI schema marks `outcomePrices` (and
-   `conditionId`, replaced by `id`) as deprecated, so relying on those
-   alone risks silently skipping real markets. Note: some
-   weather questions (e.g. "Highest temperature in NYC on July 18?") are
-   grouped Polymarket events with several range-bucket outcomes ("78 or
-   below", "79 to 80", ...) rather than one simple threshold.
-   `storm/bot.py` logs the raw JSON of the first several markets the
-   parser can't handle (capped, so it can't spam logs) specifically to
-   help extend the parser for shapes like this. The probability math for
-   range-bucket markets already exists and is fully tested
-   (`storm/bucket_signal.py` — models the forecast as a normal
-   distribution and integrates it over each bucket's range) but isn't
-   wired into discovery yet, pending real field names for how Polymarket.US
-   represents a bucket's range boundaries within a grouped event.
+3. **Parses the market** — two paths, tried in order:
+   - **Range-bucket markets** (`storm/tc_temp_parser.py`): Polymarket.US's
+     real `tc-temp-{airport}{high|low}-{date}-gte{low}lt{high}f` slug
+     format, confirmed from production data (e.g.
+     `tc-temp-mdwhigh-2026-07-25-gte82lt83f` = daily high, July 25 2026,
+     bucket [82, 83)°F). The slug directly encodes the bucket's exact
+     boundaries, so it's parsed with a regex rather than guessed at from
+     free text. Priced via `storm/bucket_signal.py` — models the day's
+     forecast as a normal distribution and integrates it over the bucket's
+     `[low, high)` range to get Storm's own estimated probability, then
+     compares that to the bucket's market price.
+   - **Everything else** (rain/snow, or threshold-phrased markets):
+     `storm/market_parser.py` extracts location, weather variable, and
+     target date from the question text and the market's `endDate`.
+   Pricing comes from `storm/market_pricing.py`, which prefers the modern
+   `marketSides` (long/short) representation and falls back to the legacy
+   `outcomePrices` field — Polymarket.US's own OpenAPI schema marks
+   `outcomePrices` (and `conditionId`, replaced by `id`) as deprecated, so
+   relying on those alone risks silently skipping real markets.
+   Both paths are restricted to the three tracked airports
+   (`storm/airports.py`) — Storm no longer monitors a broader city list.
+   `storm/bot.py` logs the raw JSON of the first several markets neither
+   path can parse (capped, so it can't spam logs), to help extend the
+   parsers for shapes Storm is still missing.
 4. **Fetches a forecast** — pulls NWS's (api.weather.gov) forecast for that
    location/date (`storm/weather_client.py`), plus a second, free/keyless
    forecast from Open-Meteo (`storm/openmeteo_client.py`), which itself
@@ -79,8 +87,39 @@ active exit management adds complexity without much benefit here).
 
 The market-question parser is intentionally conservative: it returns `None`
 (skip) rather than guess when it doesn't recognize the phrasing. Extend
-`CITY_COORDINATES` and the keyword lists in `storm/market_parser.py` /
-`storm/market_filter.py` as you find weather markets Storm misses.
+`storm/airports.py`'s alias list and the keyword lists in
+`storm/market_parser.py` / `storm/market_filter.py` as you find weather
+markets Storm misses for MIA/ORD/LAX.
+
+> **Note on Chicago:** Storm tracks ORD (O'Hare) per explicit choice, but
+> real production `tc-temp-*` slugs observed so far use `mdw` (Midway), a
+> different station in the same city. If Storm shows no Chicago-specific
+> range-bucket activity, that's why — add an `"mdw"` entry to
+> `storm/airports.py`'s `AIRPORTS` dict (same city, different station) if
+> Midway-based markets should be tracked instead of/alongside O'Hare.
+
+## Dashboard
+
+Storm serves a real-time, read-only dashboard alongside its unchanged
+autonomous scan-and-trade loop — additive only, it never gates or delays a
+trade (`storm/dashboard.py`, `storm/dashboard_state.py`):
+
+- **`GET /`** — a single auto-refreshing page (polls every 5s) showing, per
+  airport: the latest blended/NWS/Open-Meteo forecast, every market
+  currently tracked with its computed signal/edge, and a table of recent
+  trade signals.
+- **`GET /api/state`** — the same data as JSON, for any external consumer.
+- **`GET /healthz`** — plain liveness check (used by Railway's health
+  check, see below).
+
+It runs on its own daemon thread (`storm/dashboard.py`'s `DashboardServer`,
+uvicorn) — the same pattern as the Telegram command listener — since
+Storm's main loop is a plain synchronous `while True` rather than
+asyncio-based. `storm/bot.py` records every weather fetch, every market it
+evaluates (whether or not a signal fires), and every trade signal into a
+thread-safe `DashboardState` (`storm/dashboard_state.py`) as it works
+through its normal cycle; the dashboard just reads a locked snapshot of
+that state. Set `STORM_DASHBOARD_ENABLED=false` to disable it entirely.
 
 ## Sharing a Polymarket.US account with Colossus
 
@@ -148,25 +187,29 @@ Telegram entirely and relies on stdout logs.
 ## Project layout
 
 ```
-main.py                   entrypoint: builds the bot, runs the poll loop
+main.py                   entrypoint: builds the bot, starts the dashboard, runs the poll loop
 storm/
   config.py                env-var driven configuration
   logging_config.py
   rate_limiter.py           shared token-bucket limiter
+  airports.py               the three tracked airports (MIA/ORD/LAX) + alias lookup
   gamma_client.py           Polymarket Gamma Markets API (discovery fallback)
   market_filter.py          weather keyword/category/structured filter
-  market_parser.py          question/description -> WeatherMarketSpec
+  tc_temp_parser.py         parses real "tc-temp-*" range-bucket market slugs
+  market_parser.py          question/description -> WeatherMarketSpec (non-bucket markets)
   market_pricing.py         marketSides/outcomePrices -> [yes_price, no_price]
   weather_client.py         NWS (api.weather.gov) forecast client
   openmeteo_client.py       Open-Meteo forecast client (second ensemble source)
-  signal_engine.py          blended forecast + market price -> TradeSignal
-  bucket_signal.py          range-bucket probability math (not yet wired in)
+  signal_engine.py          blended forecast + market price -> TradeSignal (non-bucket markets)
+  bucket_signal.py          range-bucket probability math, wired in via tc_temp_parser.py
   position_sizing.py        Kelly-criterion position sizing
   risk_manager.py           pause/kill-switch + position/session/daily caps
   us_client.py              polymarket-us SDK wrapper, rate-limited
   trader.py                 executes signals (dry-run or live) + Telegram alert
   telegram_bot.py           minimal Telegram Bot API client (plain HTTPS)
   telegram_commands.py      background thread handling /status /pause /resume /report
+  dashboard_state.py        thread-safe shared state written by bot.py, read by dashboard.py
+  dashboard.py              FastAPI app + background thread serving the real-time dashboard
   bot.py                    orchestrates one scan-and-trade cycle
 tests/                      unit tests (no network calls)
 ```
@@ -200,18 +243,25 @@ See `.env.example` for the full list with defaults. Notable ones:
 | `STORM_MAX_REQUESTS_PER_SECOND`, `STORM_RATE_LIMITER_BURST` | Storm's self-throttle share of the shared Polymarket account's rate limit. |
 | `NWS_USER_AGENT` | Required by NWS's usage policy — set to something identifying (e.g. an email). |
 | *(none)* | Open-Meteo needs no env var — free, keyless, used automatically as a second forecast source. |
+| `STORM_DASHBOARD_ENABLED` | `true` (default) serves the real-time dashboard; `false` disables it. Never affects trading either way. |
+| `PORT` | Port the dashboard listens on. Railway injects this automatically for the public service; only set it yourself for local runs (defaults to `8000`). |
 
 ## Deploying to Railway
 
-This repo is set up for a Railway **worker** service (no HTTP port needed):
+This repo runs as a Railway **web** service — `python main.py` both runs
+the scan/trade loop and serves the dashboard on `PORT`:
 
 - `Procfile` / `railway.json` run `python main.py` on start, restarting on
-  failure.
+  failure. `railway.json` also points Railway's health check at
+  `GET /healthz`.
 - Set all variables from `.env.example` as Railway project variables
-  (never commit a real `.env`).
-- Deploy with `LIVE_TRADING=false` first, watch the logs/Telegram for a
-  few cycles of dry-run output, then flip `LIVE_TRADING=true` once you're
-  satisfied.
+  (never commit a real `.env`). Leave `PORT` unset — Railway provides it.
+- Enable **Public Networking** on the service (Railway settings) if you
+  want the dashboard reachable at a public URL; the scan/trade loop runs
+  identically either way.
+- Deploy with `LIVE_TRADING=false` first, watch the logs/Telegram/
+  dashboard for a few cycles of dry-run output, then flip
+  `LIVE_TRADING=true` once you're satisfied.
 - `RAILWAY_DEPLOYMENT_OVERLAP_SECONDS` (visible on Colossus's Railway
   service) is a Railway platform setting, not something Storm's code
   reads — set it directly in Railway's service settings if you want to
@@ -224,5 +274,6 @@ pytest
 ```
 
 All tests are pure unit tests (rate limiter timing, risk manager caps/
-persistence, market filter/parser, signal engine, Telegram command
-handling) — no network calls, so they run the same locally and in CI.
+persistence, market filter/parser, tc-temp slug parsing, bucket
+probability math, signal engine, Telegram command handling, dashboard
+state/API) — no network calls, so they run the same locally and in CI.

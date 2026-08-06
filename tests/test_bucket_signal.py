@@ -4,6 +4,7 @@ from storm.bucket_signal import (
     BucketSignal,
     TemperatureBucket,
     bucket_probability,
+    evaluate_bucket,
     generate_bucket_signals,
 )
 
@@ -82,6 +83,19 @@ def test_generate_bucket_signals_skips_fairly_priced_bucket():
     signals = generate_bucket_signals(buckets, forecast_mean=80, forecast_stdev=3, min_edge=0.30)
     # edge would need to be huge to clear a 30% threshold on a near-fair bucket
     assert signals == []
+
+
+def test_evaluate_bucket_returns_signal_on_underpriced_bucket():
+    bucket = _bucket(79, 81, yes_price=0.10)
+    signal = evaluate_bucket(bucket, forecast_mean=80, forecast_stdev=3, min_edge=0.08)
+    assert signal is not None
+    assert signal.side == "YES"
+
+
+def test_evaluate_bucket_returns_none_on_fair_price():
+    bucket = _bucket(79, 81, yes_price=0.50)
+    signal = evaluate_bucket(bucket, forecast_mean=80, forecast_stdev=3, min_edge=0.30)
+    assert signal is None
 
 
 def test_generate_bucket_signals_evaluates_each_bucket_independently():

@@ -15,11 +15,12 @@ that specific bucket, then compare to that bucket's actual market price -
 the same approach other Polymarket weather bots use (build a
 distribution, price each bucket, trade whichever is mispriced).
 
-NOT YET WIRED into market discovery/bot.py - that requires knowing the
-real field names Polymarket.US uses for a bucket's range label and
-boundaries within a grouped event, which bot.py's diagnostic logging is
-still gathering (see _log_discovery_diagnostics). This module is ready to
-connect once that data is in hand.
+Wired into storm/bot.py via storm/tc_temp_parser.py, which parses the
+bucket boundaries directly out of Polymarket.US's real "tc-temp-*" market
+slug format (confirmed from production data) - each such market is
+evaluated as a single bucket via evaluate_bucket(); generate_bucket_signals
+below evaluates several buckets from one grouped event at once, for
+whenever that grouped-event shape is also confirmed and wired in.
 """
 
 from __future__ import annotations
@@ -61,6 +62,26 @@ def bucket_probability(mean: float, stdev: float, low: float | None, high: float
     return max(0.0, min(1.0, upper - lower))
 
 
+def evaluate_bucket(
+    bucket: TemperatureBucket,
+    forecast_mean: float,
+    forecast_stdev: float,
+    min_edge: float,
+) -> BucketSignal | None:
+    """Evaluate a single bucket against a forecast distribution. Returns
+    None if the edge (either side) doesn't clear min_edge."""
+    estimated_yes = bucket_probability(forecast_mean, forecast_stdev, bucket.low, bucket.high)
+    market_yes = bucket.yes_price
+    edge_yes = estimated_yes - market_yes
+    edge_no = (1.0 - estimated_yes) - (1.0 - market_yes)
+
+    if edge_yes >= min_edge:
+        return BucketSignal(bucket, "YES", estimated_yes, market_yes, edge_yes)
+    if edge_no >= min_edge:
+        return BucketSignal(bucket, "NO", 1.0 - estimated_yes, 1.0 - market_yes, edge_no)
+    return None
+
+
 def generate_bucket_signals(
     buckets: list[TemperatureBucket],
     forecast_mean: float,
@@ -71,15 +92,5 @@ def generate_bucket_signals(
     distribution, returning a signal for each bucket whose edge clears
     min_edge (there may be more than one, though typically at most the
     bucket(s) nearest the forecast mean will show a real edge)."""
-    signals: list[BucketSignal] = []
-    for bucket in buckets:
-        estimated_yes = bucket_probability(forecast_mean, forecast_stdev, bucket.low, bucket.high)
-        market_yes = bucket.yes_price
-        edge_yes = estimated_yes - market_yes
-        edge_no = (1.0 - estimated_yes) - (1.0 - market_yes)
-
-        if edge_yes >= min_edge:
-            signals.append(BucketSignal(bucket, "YES", estimated_yes, market_yes, edge_yes))
-        elif edge_no >= min_edge:
-            signals.append(BucketSignal(bucket, "NO", 1.0 - estimated_yes, 1.0 - market_yes, edge_no))
-    return signals
+    signals = [evaluate_bucket(b, forecast_mean, forecast_stdev, min_edge) for b in buckets]
+    return [s for s in signals if s is not None]

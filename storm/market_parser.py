@@ -3,9 +3,11 @@ WeatherMarketSpec that the signal engine can reason about.
 
 This is heuristic by nature - Polymarket doesn't provide structured
 weather-market metadata, only free text. Markets Storm can't confidently
-parse are skipped (returns None) rather than guessed at. Extend
-CITY_COORDINATES and the keyword lists below as new phrasing/cities show
-up in markets Storm is missing.
+parse are skipped (returns None) rather than guessed at. Location
+matching is restricted to storm/airports.py's three tracked airports
+(MIA, ORD, LAX) - Storm no longer monitors the broader city list it used
+to. Extend the keyword lists below as new phrasing shows up in markets
+Storm is missing for those three.
 """
 
 from __future__ import annotations
@@ -15,33 +17,7 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-# Major US cities Polymarket weather markets commonly reference, mapped to
-# lat/lon for NWS point lookups.
-CITY_COORDINATES: dict[str, tuple[float, float]] = {
-    "new york city": (40.7128, -74.0060),
-    "new york": (40.7128, -74.0060),
-    "nyc": (40.7128, -74.0060),
-    "los angeles": (34.0522, -118.2437),
-    "chicago": (41.8781, -87.6298),
-    "houston": (29.7604, -95.3698),
-    "phoenix": (33.4484, -112.0740),
-    "philadelphia": (39.9526, -75.1652),
-    "san antonio": (29.4241, -98.4936),
-    "san diego": (32.7157, -117.1611),
-    "dallas": (32.7767, -96.7970),
-    "austin": (30.2672, -97.7431),
-    "miami": (25.7617, -80.1918),
-    "atlanta": (33.7490, -84.3880),
-    "boston": (42.3601, -71.0589),
-    "seattle": (47.6062, -122.3321),
-    "denver": (39.7392, -104.9903),
-    "washington dc": (38.9072, -77.0369),
-    "washington d.c.": (38.9072, -77.0369),
-    "las vegas": (36.1699, -115.1398),
-    "san francisco": (37.7749, -122.4194),
-    "minneapolis": (44.9778, -93.2650),
-    "detroit": (42.3314, -83.0458),
-}
+from storm.airports import find_airport_by_alias
 
 _ABOVE_WORDS = ("above", "over", "exceed", "exceeds", "higher than", "greater than", "more than", "hotter than")
 _BELOW_WORDS = ("below", "under", "less than", "lower than", "colder than")
@@ -65,12 +41,10 @@ class WeatherMarketSpec:
 
 
 def _find_location(lowered_text: str) -> tuple[str, float, float] | None:
-    # Longest name first so "new york city" isn't shadowed by "new york".
-    for city in sorted(CITY_COORDINATES, key=len, reverse=True):
-        if city in lowered_text:
-            lat, lon = CITY_COORDINATES[city]
-            return city, lat, lon
-    return None
+    airport = find_airport_by_alias(lowered_text)
+    if airport is None:
+        return None
+    return airport.code, airport.lat, airport.lon
 
 
 def _has_temp_context(lowered_text: str) -> bool:

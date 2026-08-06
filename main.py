@@ -7,6 +7,8 @@ import time
 
 from storm.bot import StormBot
 from storm.config import config
+from storm.dashboard import DashboardServer
+from storm.dashboard_state import DashboardState
 from storm.gamma_client import GammaClient
 from storm.logging_config import setup_logging
 from storm.openmeteo_client import OpenMeteoClient
@@ -21,7 +23,7 @@ from storm.weather_client import NWSClient
 logger = logging.getLogger(__name__)
 
 
-def build_bot() -> tuple[StormBot, TelegramCommandListener, TelegramNotifier]:
+def build_bot() -> tuple[StormBot, TelegramCommandListener, TelegramNotifier, DashboardState]:
     # Single rate limiter shared across every Polymarket call (Gamma reads
     # and order placement alike) since they hit the same account as Colossus.
     rate_limiter = TokenBucketRateLimiter(config.MAX_REQUESTS_PER_SECOND, config.RATE_LIMITER_BURST)
@@ -58,10 +60,16 @@ def build_bot() -> tuple[StormBot, TelegramCommandListener, TelegramNotifier]:
         kelly_multiplier=config.KELLY_MULTIPLIER,
     )
 
+    # Dashboard is purely additive - the scan/trade loop above is built and
+    # run identically whether or not it's enabled; this just gives StormBot
+    # somewhere to record what it's already doing.
+    dashboard_state = DashboardState()
+
     bot = StormBot(
         us_client, gamma_client, weather_client, trader, risk_manager, config.MIN_EDGE,
         open_meteo_client=open_meteo_client,
         diagnostic_probe_slug=config.DIAGNOSTIC_PROBE_SLUG,
+        dashboard_state=dashboard_state,
     )
 
     command_listener = TelegramCommandListener(
@@ -74,7 +82,7 @@ def build_bot() -> tuple[StormBot, TelegramCommandListener, TelegramNotifier]:
         min_edge=config.MIN_EDGE,
     )
 
-    return bot, command_listener, notifier
+    return bot, command_listener, notifier, dashboard_state
 
 
 def main() -> None:
@@ -85,8 +93,13 @@ def main() -> None:
         config.SCAN_INTERVAL,
         config.MAX_REQUESTS_PER_SECOND,
     )
-    bot, command_listener, notifier = build_bot()
+    bot, command_listener, notifier, dashboard_state = build_bot()
     command_listener.start()
+
+    if config.DASHBOARD_ENABLED:
+        DashboardServer(dashboard_state, port=config.DASHBOARD_PORT).start()
+    else:
+        logger.info("Dashboard disabled (STORM_DASHBOARD_ENABLED=false)")
 
     mode = "LIVE trading" if config.LIVE_TRADING else "Dry-run (no real orders)"
     notifier.send(

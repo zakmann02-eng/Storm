@@ -1,3 +1,6 @@
+import datetime as dt
+
+from storm.airports import AIRPORTS
 from storm.bot import StormBot
 
 
@@ -187,10 +190,8 @@ def test_slug_probe_logs_not_found(caplog):
     assert any("slug probe" in m and "NOT FOUND" in m for m in messages)
 
 
-class _SpecStub:
-    lat, lon = 40.71, -74.01
-    target_date = None
-    location = "new york city"
+_MIA = AIRPORTS["mia"]
+_TARGET_DATE = dt.date(2026, 7, 25)
 
 
 def test_open_meteo_forecast_used_when_configured():
@@ -199,17 +200,234 @@ def test_open_meteo_forecast_used_when_configured():
     open_meteo_client = _FakeOpenMeteoClient(forecast={"temperature_max": 90})
     bot = _bot(us_client, gamma_client, open_meteo_client)
 
-    assert bot._get_open_meteo_forecast(_SpecStub()) == {"temperature_max": 90}
+    assert bot._fetch_open_meteo(_MIA, _TARGET_DATE) == {"temperature_max": 90}
 
 
 def test_open_meteo_forecast_none_when_not_configured():
     bot = _bot(_FakeUSClient(), _FakeGammaClient(), open_meteo_client=None)
 
-    assert bot._get_open_meteo_forecast(_SpecStub()) is None
+    assert bot._fetch_open_meteo(_MIA, _TARGET_DATE) is None
 
 
 def test_open_meteo_forecast_failure_falls_back_to_none():
     open_meteo_client = _FakeOpenMeteoClient(raise_error=True)
     bot = _bot(_FakeUSClient(), _FakeGammaClient(), open_meteo_client)
 
-    assert bot._get_open_meteo_forecast(_SpecStub()) is None
+    assert bot._fetch_open_meteo(_MIA, _TARGET_DATE) is None
+
+
+# --- Integration: _process_market routing, trading, and dashboard recording ---
+
+
+class _ConfigurableWeatherClient:
+    def __init__(self, periods=None):
+        self._periods = periods if periods is not None else []
+
+    def get_forecast_for_date(self, lat, lon, target_date):
+        return self._periods
+
+
+def _nws_periods(target_date, high_temp):
+    return [
+        {"startTime": f"{target_date.isoformat()}T08:00:00-05:00", "isDaytime": True, "temperature": high_temp},
+        {"startTime": f"{target_date.isoformat()}T20:00:00-05:00", "isDaytime": False, "temperature": high_temp - 15},
+    ]
+
+
+def _tc_temp_market(slug, yes_price):
+    return {
+        "id": f"0x{slug}",
+        "slug": slug,
+        "marketSides": [{"long": True, "price": yes_price}, {"long": False, "price": 1 - yes_price}],
+    }
+
+
+def test_process_market_tc_temp_underpriced_bucket_trades_and_records_dashboard():
+    from storm.dashboard_state import DashboardState
+
+    # bucket [89, 90) at mean=89, stdev=3 carries ~13% estimated probability
+    # (bucket_signal.py's normal model); pricing it at 2c is clearly cheap.
+    slug = "tc-temp-miahigh-2026-07-25-gte89lt90f"
+    market = _tc_temp_market(slug, yes_price=0.02)
+    weather_client = _ConfigurableWeatherClient(_nws_periods(dt.date(2026, 7, 25), high_temp=89))
+    trader = _FakeTrader()
+    dashboard = DashboardState()
+
+    bot = StormBot(
+        _FakeUSClient(), _FakeGammaClient(), weather_client, trader, _FakeRiskManager(), min_edge=0.08,
+        dashboard_state=dashboard,
+    )
+    bot._process_market(market)
+
+    assert len(trader.executed) == 1
+    assert trader.executed[0].side == "YES"
+
+    snap = dashboard.snapshot()
+    assert "mia" in snap["weather"]
+    entry = snap["markets"]["mia"][slug]
+    assert entry["type"] == "tc-temp"
+    assert entry["side"] == "YES"
+    assert len(snap["history"]) == 1
+    assert snap["history"][0]["market_slug"] == slug
+
+
+def test_process_market_tc_temp_fair_price_records_dashboard_without_trading():
+    from storm.dashboard_state import DashboardState
+
+    # bucket [89, 90) at mean=89, stdev=3 carries ~13% estimated probability;
+    # pricing it right there leaves no edge on either side.
+    slug = "tc-temp-laxhigh-2026-07-25-gte89lt90f"
+    market = _tc_temp_market(slug, yes_price=0.13)
+    weather_client = _ConfigurableWeatherClient(_nws_periods(dt.date(2026, 7, 25), high_temp=89))
+    trader = _FakeTrader()
+    dashboard = DashboardState()
+
+    bot = StormBot(
+        _FakeUSClient(), _FakeGammaClient(), weather_client, trader, _FakeRiskManager(), min_edge=0.08,
+        dashboard_state=dashboard,
+    )
+    bot._process_market(market)
+
+    assert trader.executed == []
+    snap = dashboard.snapshot()
+    assert snap["markets"]["lax"][slug]["side"] is None
+    assert snap["history"] == []
+
+
+def test_process_market_tc_temp_untracked_airport_is_ignored():
+    # mdw (Midway) is real production data but not one of Storm's three
+    # tracked airports (ord was chosen instead) - should be skipped entirely.
+    from storm.dashboard_state import DashboardState
+
+    slug = "tc-temp-mdwhigh-2026-07-25-gte89lt90f"
+    market = _tc_temp_market(slug, yes_price=0.10)
+    trader = _FakeTrader()
+    dashboard = DashboardState()
+
+    bot = StormBot(
+        _FakeUSClient(), _FakeGammaClient(), _FakeWeatherClient(), trader, _FakeRiskManager(), min_edge=0.08,
+        dashboard_state=dashboard,
+    )
+    bot._process_market(market)
+
+    assert trader.executed == []
+    assert dashboard.snapshot()["markets"] == {}
+
+
+def test_process_market_tc_temp_no_forecast_yet_is_skipped():
+    from storm.dashboard_state import DashboardState
+
+    slug = "tc-temp-miahigh-2026-07-25-gte89lt90f"
+    market = _tc_temp_market(slug, yes_price=0.10)
+    trader = _FakeTrader()
+    dashboard = DashboardState()
+
+    bot = StormBot(
+        _FakeUSClient(), _FakeGammaClient(), _FakeWeatherClient(), trader, _FakeRiskManager(), min_edge=0.08,
+        dashboard_state=dashboard,
+    )
+    bot._process_market(market)  # _FakeWeatherClient returns [] -> no NWS, no Open-Meteo configured
+
+    assert trader.executed == []
+    assert dashboard.snapshot()["weather"] == {}
+    assert dashboard.snapshot()["markets"] == {}
+
+
+def test_process_market_threshold_market_trades_and_records_dashboard():
+    from storm.dashboard_state import DashboardState
+
+    market = {
+        "id": "0xrain-mia",
+        "slug": "mia-rain-jul-25",
+        "question": "Will it rain at Miami International Airport on July 25?",
+        "endDate": "2026-07-25T00:00:00Z",
+        "marketSides": [{"long": True, "price": 0.10}, {"long": False, "price": 0.90}],
+    }
+    weather_client = _ConfigurableWeatherClient([
+        {
+            "startTime": "2026-07-25T08:00:00-05:00",
+            "isDaytime": True,
+            "probabilityOfPrecipitation": {"value": 90},
+        }
+    ])
+    trader = _FakeTrader()
+    dashboard = DashboardState()
+
+    bot = StormBot(
+        _FakeUSClient(), _FakeGammaClient(), weather_client, trader, _FakeRiskManager(), min_edge=0.08,
+        dashboard_state=dashboard,
+    )
+    bot._process_market(market)
+
+    assert len(trader.executed) == 1
+    assert trader.executed[0].side == "YES"
+
+    snap = dashboard.snapshot()
+    entry = snap["markets"]["mia"]["mia-rain-jul-25"]
+    assert entry["type"] == "rain"
+    assert entry["side"] == "YES"
+    assert len(snap["history"]) == 1
+
+
+def test_process_market_threshold_market_untracked_city_skips_dashboard():
+    from storm.dashboard_state import DashboardState
+
+    market = {
+        "id": "0xrain-denver",
+        "slug": "denver-rain-jul-25",
+        "question": "Will it rain in Denver on July 25?",
+        "endDate": "2026-07-25T00:00:00Z",
+        "marketSides": [{"long": True, "price": 0.10}, {"long": False, "price": 0.90}],
+    }
+    weather_client = _ConfigurableWeatherClient([
+        {
+            "startTime": "2026-07-25T08:00:00-05:00",
+            "isDaytime": True,
+            "probabilityOfPrecipitation": {"value": 90},
+        }
+    ])
+    trader = _FakeTrader()
+    dashboard = DashboardState()
+
+    bot = StormBot(
+        _FakeUSClient(), _FakeGammaClient(), weather_client, trader, _FakeRiskManager(), min_edge=0.08,
+        dashboard_state=dashboard,
+    )
+    bot._process_market(market)
+
+    # Denver isn't parseable at all (find_airport_by_alias returns None for
+    # spec-building), so parse_weather_market itself returns None upstream.
+    assert trader.executed == []
+    assert dashboard.snapshot()["markets"] == {}
+
+
+def test_process_market_without_dashboard_state_does_not_crash():
+    slug = "tc-temp-miahigh-2026-07-25-gte89lt90f"
+    market = _tc_temp_market(slug, yes_price=0.02)
+    weather_client = _ConfigurableWeatherClient(_nws_periods(dt.date(2026, 7, 25), high_temp=89))
+    trader = _FakeTrader()
+
+    bot = StormBot(
+        _FakeUSClient(), _FakeGammaClient(), weather_client, trader, _FakeRiskManager(), min_edge=0.08,
+    )
+    bot._process_market(market)  # no dashboard_state configured - must be a safe no-op
+
+    assert len(trader.executed) == 1
+
+
+def test_run_cycle_records_scan_summary_to_dashboard():
+    from storm.dashboard_state import DashboardState
+
+    markets = [{"slug": "a", "question": "Highest temperature in NYC?"}]
+    us_client = _FakeUSClient(markets=markets)
+    dashboard = DashboardState()
+
+    bot = StormBot(
+        us_client, _FakeGammaClient(), _FakeWeatherClient(), _FakeTrader(), _FakeRiskManager(), min_edge=0.08,
+        dashboard_state=dashboard,
+    )
+    bot.run_cycle()
+
+    snap = dashboard.snapshot()
+    assert snap["last_scan_summary"] == {"total_markets": 1, "weather_related": 1}
+    assert snap["last_scan_at"] is not None

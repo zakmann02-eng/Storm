@@ -3,3 +3,7 @@ python-dotenv>=1.0,<2
 # Unpinned to match Colossus's convention - this is the Polymarket.US SDK,
 # a different product/API surface than the standard polymarket.com CLOB.
 polymarket-us
+# Read-only real-time dashboard (storm/dashboard.py), run on its own
+# background thread alongside the main scan loop.
+fastapi>=0.110,<1
+uvicorn>=0.29,<1
