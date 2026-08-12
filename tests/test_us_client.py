@@ -1,4 +1,4 @@
-from storm.us_client import _extract_items, _flatten_grouped
+from storm.us_client import USClient, _extract_items, _flatten_grouped
 
 
 def test_extract_items_from_bare_list():
@@ -45,3 +45,77 @@ def test_flatten_grouped_handles_already_flat_market():
     assert len(rows) == 1
     assert rows[0]["question"] == "Will it rain in NYC on July 20?"
     assert rows[0]["eventSlug"] == "rain-nyc-event"
+
+
+# --- list_markets pagination: retry-then-skip on page failure ---
+
+
+class _FakeRateLimiter:
+    def acquire(self):
+        pass
+
+
+class _FakeEvents:
+    """responses[i] is either a dict (returned as-is) or an Exception
+    (raised) for the i-th call to .list(), in order. Extra calls past the
+    end reuse the last response."""
+
+    def __init__(self, responses):
+        self._responses = list(responses)
+        self.calls: list[dict] = []
+
+    def list(self, params):
+        self.calls.append(params)
+        i = min(len(self.calls) - 1, len(self._responses) - 1)
+        response = self._responses[i]
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+
+def _us_client(responses):
+    client = USClient.__new__(USClient)
+    client._rate_limiter = _FakeRateLimiter()
+    client._client = type("FakeSDK", (), {"events": _FakeEvents(responses)})()
+    return client
+
+
+def test_list_markets_paginates_until_genuinely_empty_page():
+    client = _us_client([
+        {"events": [{"slug": "a"}]},
+        {"events": [{"slug": "b"}]},
+        {"events": []},
+    ])
+    markets = client.list_markets(limit=1)
+    assert [m["slug"] for m in markets] == ["a", "b"]
+    assert client._client.events.calls[0]["offset"] == 0
+    assert client._client.events.calls[1]["offset"] == 1
+    assert client._client.events.calls[2]["offset"] == 2
+
+
+def test_list_markets_retries_a_failed_page_then_succeeds(monkeypatch):
+    monkeypatch.setattr("storm.us_client.time.sleep", lambda _: None)
+    client = _us_client([
+        RuntimeError("504"),
+        {"events": [{"slug": "a"}]},  # succeeds on retry
+        {"events": []},
+    ])
+    markets = client.list_markets(limit=1, max_retries_per_page=2)
+    assert [m["slug"] for m in markets] == ["a"]
+
+
+def test_list_markets_skips_a_persistently_failing_page_and_keeps_going(monkeypatch):
+    # Real production case: offset X fails every single attempt (a
+    # persistent 504), but markets past it should still be discovered
+    # rather than the whole scan silently stopping there.
+    monkeypatch.setattr("storm.us_client.time.sleep", lambda _: None)
+    client = _us_client([
+        {"events": [{"slug": "a"}]},
+        RuntimeError("504"),
+        RuntimeError("504"),
+        RuntimeError("504"),
+        {"events": [{"slug": "b"}]},
+        {"events": []},
+    ])
+    markets = client.list_markets(limit=1, max_retries_per_page=2)
+    assert [m["slug"] for m in markets] == ["a", "b"]

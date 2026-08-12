@@ -106,3 +106,17 @@ def test_tag_sport_or_league_blocks_keyword_collision():
         "tags": [{"label": "NCAAF", "sport": {"name": "Football"}}],
     }
     assert not is_weather_market(market)
+
+
+def test_matches_real_climate_category_even_without_keywords():
+    # Confirmed from a real production category breakdown (48,598 active
+    # markets): Polymarket.US's actual weather category is "climate", not
+    # "Temp"/"weather" - this is the exact shape that was previously
+    # silently rejected on every single scan cycle.
+    market = {
+        "question": "Highest temperature at LAX on July 25?",
+        "slug": "tc-temp-laxhigh-2026-07-25-gte89lt90f",
+        "category": "climate",
+        "tags": [],
+    }
+    assert is_weather_market(market)

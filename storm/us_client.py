@@ -10,6 +10,7 @@ two bots behave identically against the exchange.
 from __future__ import annotations
 
 import logging
+import time
 
 from storm.rate_limiter import TokenBucketRateLimiter
 
@@ -66,7 +67,7 @@ class USClient:
         logger.info("Polymarket.US client initialized - key_id %s...", key_id.strip()[:8])
         return client
 
-    def list_markets(self, limit: int = 200, max_offset: int = 60000) -> list[dict]:
+    def list_markets(self, limit: int = 200, max_offset: int = 60000, max_retries_per_page: int = 2) -> list[dict]:
         """Storm's primary market-discovery source: events.list() ->
         /v1/events, same as Colossus.
 
@@ -80,25 +81,51 @@ class USClient:
         past that point. The only reliable end-of-results signal is a
         genuinely EMPTY page, which is what Colossus's own working
         pagination checks for; mirrored here. max_offset is just a sanity
-        ceiling against a runaway loop if the API ever misbehaves."""
+        ceiling against a runaway loop if the API ever misbehaves.
+
+        Also confirmed from production: gateway.polymarket.us can return a
+        persistent 504 at one specific offset, every single cycle (a slow/
+        oversized event bundled in that one page, not a transient blip).
+        Storm previously treated any page-fetch error as "pagination is
+        over" and threw away everything past that offset, forever. A
+        failed page is now retried a couple of times, and if it still
+        fails, that one page is skipped (not the whole rest of the scan) -
+        offset keeps advancing so later pages still get a chance."""
         all_markets: list[dict] = []
         offset = 0
         while offset <= max_offset:
-            self._rate_limiter.acquire()
-            try:
-                data = self._client.events.list({"limit": limit, "active": True, "offset": offset})
-            except Exception:
-                logger.exception("events.list failed at offset %d", offset)
-                break
-
-            items = _extract_items(data, "events", "data", "results")
-            if not items:
-                break
-
-            all_markets.extend(_flatten_grouped(items))
+            items, fetched_ok = self._fetch_events_page(limit, offset, max_retries_per_page)
+            if fetched_ok and not items:
+                break  # genuinely empty page - real end of results
+            if items:
+                all_markets.extend(_flatten_grouped(items))
             offset += limit
 
         return all_markets
+
+    def _fetch_events_page(self, limit: int, offset: int, max_retries: int) -> tuple[list[dict], bool]:
+        """Returns (items, fetched_ok). fetched_ok=False means every retry
+        errored out - the caller should skip this page rather than treat
+        it as an empty/end-of-results signal."""
+        for attempt in range(max_retries + 1):
+            self._rate_limiter.acquire()
+            try:
+                data = self._client.events.list({"limit": limit, "active": True, "offset": offset})
+                return _extract_items(data, "events", "data", "results"), True
+            except Exception:
+                if attempt < max_retries:
+                    logger.warning(
+                        "events.list failed at offset %d (attempt %d/%d) - retrying",
+                        offset, attempt + 1, max_retries + 1,
+                    )
+                    time.sleep(1.5 * (attempt + 1))
+                    continue
+                logger.exception(
+                    "events.list failed at offset %d after %d attempts - skipping this page, scan continues",
+                    offset, max_retries + 1,
+                )
+                return [], False
+        return [], False
 
     def probe_categories(self, candidates: tuple[str, ...], limit: int = 5) -> dict[str, object]:
         """Diagnostic only: explicitly request each candidate category

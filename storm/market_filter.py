@@ -1,14 +1,26 @@
 """Keyword-based filtering to find weather markets among all Polymarket
 markets, and to keep Storm out of Colossus's sports-league territory.
 
-Polymarket.US groups all weather markets (temperature, rain, snow,
-storms) under a single "Temp" category/tag in the app - CATEGORY_TAGS
-below is an exact-match check against that (plus a couple of likely
-variants), which is far more reliable than free-text keyword matching.
+Polymarket.US groups weather markets (temperature, rain, snow, storms)
+under a category/tag - CATEGORY_TAGS below is an exact-match check
+against that, which is far more reliable than free-text keyword matching.
 It's checked first; the keyword heuristic on question/slug/description
 text remains as a fallback for markets that lack clean category/tag data.
 False negatives (missing an oddly-worded weather market) are safer than
 false positives (Storm trading a market it doesn't understand).
+
+Confirmed from a real production category breakdown (48,598 active
+markets: sports 46,846 / climate 1,170 / culture 411 / politics 131 /
+macro 40): the real category is "climate", not "Temp"/"weather" as
+Storm's docs-derived assumption originally had it. That earlier
+assumption meant every single one of the 1,170 climate-tagged markets was
+being silently rejected by the "trust an explicit non-matching category"
+short-circuit below, every cycle - i.e. Storm found 0 weather markets
+regardless of LIVE_TRADING. Downstream parsing (market_parser.py /
+tc_temp_parser.py) still requires a recognized airport + variable/slug
+shape before anything becomes a signal, so widening this doesn't loosen
+what Storm is willing to trade - it only lets real weather markets reach
+that parsing step in the first place.
 """
 
 from __future__ import annotations
@@ -18,8 +30,10 @@ from typing import Any
 # Exact (not substring) match against a market's category field or a tag's
 # label/slug. Deliberately exact rather than substring - "temp" as a
 # substring would false-positive on unrelated words (temporary, attempt,
-# template, ...).
-CATEGORY_TAGS = {"temp", "temps", "weather"}
+# template, ...). "temp"/"temps"/"weather" are kept alongside "climate" in
+# case Polymarket.US uses different category strings in different parts of
+# the catalog.
+CATEGORY_TAGS = {"climate", "temp", "temps", "weather"}
 
 WEATHER_KEYWORDS = (
     # Polymarket.US tc-temp-* slug patterns and daily high/low phrasing
@@ -122,9 +136,9 @@ def _haystack(market: dict[str, Any]) -> str:
 
 
 def is_weather_market(market: dict[str, Any]) -> bool:
-    # Primary signal: Polymarket.US files all weather markets under a
-    # single "Temp" category/tag - an exact match here is far more
-    # reliable than free-text keyword guessing.
+    # Primary signal: Polymarket.US files weather markets under a
+    # dedicated category/tag (confirmed real value: "climate") - an exact
+    # match here is far more reliable than free-text keyword guessing.
     if _tag_labels(market) & CATEGORY_TAGS:
         return True
 

@@ -31,7 +31,11 @@ Every cycle (`SCAN_INTERVAL`, default 120s), Storm:
    that (`storm/gamma_client.py`) is kept only as a fallback if the SDK
    call fails or returns nothing.
 2. **Filters to weather** — checks for an exact match against
-   Polymarket.US's "Temp" category/tag first, then a structured
+   Polymarket.US's real weather category/tag first (confirmed from a
+   production category breakdown of 48,598 active markets: it's
+   `"climate"`, not `"Temp"`/`"weather"` as originally assumed from
+   docs — that earlier assumption meant Storm silently found 0 weather
+   markets on every scan, live trading or not), then a structured
    "is this definitely sports?" check (`sportsMarketType`, or a tag
    carrying `sport`/`league` — both confirmed straight from Polymarket.US's
    own OpenAPI schema), then falls back to keyword-matching

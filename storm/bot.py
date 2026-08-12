@@ -51,9 +51,11 @@ _LOOSE_DIAGNOSTIC_TERMS = ("temp", "rain", "snow", "weather", "degree", "hurrica
 _MAX_LOOSE_DIAGNOSTIC_DUMPS = 5
 
 # Candidate category strings to explicitly probe for, to tell "this
-# account/key can't see Temp markets at all" apart from "the unfiltered
-# default query just doesn't surface them".
-_CATEGORY_PROBE_CANDIDATES = ("Temp", "temp", "weather", "Weather", "Temps")
+# account/key can't see weather markets at all" apart from "the
+# unfiltered default query just doesn't surface them". "climate"/"Climate"
+# is the confirmed real category (see market_filter.py); the rest are
+# kept in case Polymarket.US varies casing/naming elsewhere.
+_CATEGORY_PROBE_CANDIDATES = ("climate", "Climate", "Temp", "temp", "weather", "Weather", "Temps")
 
 # Assumed forecast-error stdev (degrees F) for the bucket probability
 # model - same scale signal_engine.py uses for its logistic curve.
